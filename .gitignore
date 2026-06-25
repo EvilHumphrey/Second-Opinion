@@ -4,6 +4,10 @@ out/
 *.dmp
 ai-prompt*.txt
 
+# ...but DO ship the synthetic, PII-free sample artifacts the README links to.
+!docs/sample-report.html
+!docs/sample-ai-prompt.txt
+
 # Packaged builds for sending to friends
 *.zip
 

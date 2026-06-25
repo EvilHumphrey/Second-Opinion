@@ -16,9 +16,11 @@ echo.
 echo   ------------------------------------------------------------
 echo   Done. If a report opened in your browser, you can close this.
 echo.
-echo   To get help: open the "out" folder (in this same folder) and
-echo   send BOTH files to the person helping you:
-echo       report.html   and   ai-prompt.txt
+echo   To get help: open the "out" folder (in this same folder).
+echo     report.html   = the full report. UNREDACTED (shows your PC name +
+echo                     hardware). Send it ONLY to someone you trust.
+echo     ai-prompt.txt = key identifiers removed. THIS is the one to paste
+echo                     into an AI (ChatGPT / Claude) or to share for help.
 echo   ------------------------------------------------------------
 echo.
 pause

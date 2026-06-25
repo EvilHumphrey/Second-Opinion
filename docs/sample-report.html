@@ -1,0 +1,103 @@
+<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Second Opinion report</title>
+<style>
+:root{--bg:#faf9f7;--card:#fff;--ink:#1f1d1a;--muted:#6b6862;--line:#e7e4dd;
+--amber:#854f0b;--amberbg:#faeeda;--blue:#0c447c;--bluebg:#e6f1fb;--gray:#444441;--graybg:#f1efe8;
+--green:#27500a;--greenbg:#eaf3de;--red:#791f1f;--redbg:#fcebeb;}
+@media (prefers-color-scheme:dark){:root{--bg:#1a1916;--card:#232120;--ink:#f0eee9;--muted:#a8a39a;--line:#34322c;
+--amber:#fac775;--amberbg:#3a2c12;--blue:#9cc6f3;--bluebg:#11243a;--gray:#cfccc4;--graybg:#2a2824;
+--green:#bde08f;--greenbg:#1c2912;--red:#f2a3a3;--redbg:#2e1414;}}
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--ink);font-family:'Segoe UI',system-ui,sans-serif;line-height:1.6;
+margin:0;padding:28px 18px;}
+.wrap{max-width:760px;margin:0 auto}
+h1{font-size:22px;font-weight:600;margin:0}
+.sub{color:var(--muted);font-size:13px;margin:4px 0 0}
+.badges{margin:14px 0 22px}
+.badge{display:inline-block;font-size:12px;padding:4px 10px;border-radius:8px;margin-right:8px}
+.b-green{background:var(--greenbg);color:var(--green)}
+.b-blue{background:var(--bluebg);color:var(--blue)}
+.section-label{font-size:13px;font-weight:600;color:var(--muted);margin:26px 0 10px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px 18px;margin-bottom:12px}
+.card-top{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:10px;flex-wrap:wrap}
+.tier-tag{font-size:11px;padding:3px 8px;border-radius:8px;background:var(--graybg);color:var(--gray)}
+.tier-1{background:var(--amberbg);color:var(--amber)}
+.tier-check{background:var(--bluebg);color:var(--blue)}
+.conf{font-size:12px;padding:3px 9px;border-radius:8px}
+.c-high{background:var(--amberbg);color:var(--amber)}
+.c-med{background:var(--bluebg);color:var(--blue)}
+.c-low{background:var(--graybg);color:var(--gray)}
+.c-ins{background:var(--bluebg);color:var(--blue)}
+.title{font-size:15px;font-weight:600;margin:0 0 8px}
+.ev{font-size:13.5px;margin:3px 0}
+.ev .lbl{color:var(--muted)}
+.for .mk{color:var(--green);font-weight:600}
+.ag .mk{color:var(--red);font-weight:600}
+.confirm{font-size:13.5px;margin-top:9px;padding-top:9px;border-top:1px solid var(--line)}
+.confirm .lbl{color:var(--muted)}
+.search{font-size:12.5px;margin-top:7px;color:var(--blue);word-break:break-word}
+.ruled{background:var(--greenbg);border-radius:8px;padding:12px 16px;font-size:13.5px;color:var(--green)}
+.ruled ul{margin:6px 0 0;padding-left:18px}
+.note{background:var(--bluebg);color:var(--blue);border-radius:8px;padding:10px 14px;font-size:13.5px;margin-bottom:10px}
+table{width:100%;border-collapse:collapse;font-size:13px}
+td{padding:5px 0;border-bottom:1px solid var(--line);vertical-align:top}
+td.k{color:var(--muted);width:42%}
+.foot{margin-top:26px;padding-top:14px;border-top:1px solid var(--line);font-size:13px;color:var(--muted)}
+.mono{font-family:Consolas,'Courier New',monospace}
+.clean{background:var(--greenbg);color:var(--green);border-radius:12px;padding:18px;font-size:15px;text-align:center}
+</style>
+</head><body><div class="wrap">
+<h1>Second Opinion</h1>
+<p class="sub">DESKTOP-EXAMPLE &middot; last 30 days &middot; generated 2026-06-24 23:56 &middot; run standard (some detailed SMART/device data needs elevation)</p>
+<div class="badges"><span class="badge b-green">read-only &middot; nothing changed</span><span class="badge b-blue">ai-prompt.txt &middot; key identifiers removed</span></div>
+<div class="note">Sharing note: this report (report.html) is NOT redacted - it shows your PC name and hardware, so share it only with the person helping you. For public help or pasting into an AI, use <span class="mono">out\ai-prompt.txt</span> instead (your username, PC name, and BIOS serial are removed - best-effort, not guaranteed).</div>
+<div class="note">2 system crash(es) across 1 stop code(s), 37 unexplained restart(s), 3 app crash event(s) in the window.</div>
+<div class="note">All 2 system crashes share one stop code (0x116) - a consistent pattern leans toward a single software/driver cause.</div>
+<div class="note">Drive health - Windows reports basic status Healthy, but detailed SMART was not readable this run (2 of 2 drive(s)); run elevated to confirm. This is not a clean bill of drive health.</div>
+<div class="section-label">Likely culprits, ranked</div>
+<div class="card">
+<div class="card-top"><span class="tier-tag tier-1">tier 1 &middot; prime suspect</span><span class="conf c-high">confidence: high</span></div>
+<p class="title">GPU display driver (NVIDIA GeForce RTX 3060 Ti)</p>
+<p class="ev for"><span class="mk">+</span> <span class="lbl">for:</span> GPU bugcheck(s) present: 0x116.</p>
+<p class="ev for"><span class="mk">+</span> <span class="lbl">for:</span> NVIDIA kernel driver reported 2 GPU reset/hang event(s) (Event 153/14) - direct evidence of GPU instability, not just a circumstantial code.</p>
+<p class="ev ag"><span class="mk">&minus;</span> <span class="lbl">against:</span> Drive health and the hardware-error log look clean - this points at the driver/GPU rather than a failing drive or CPU underneath.</p>
+<p class="confirm"><span class="lbl">confirm by:</span> Clean-reinstall the GPU driver with DDU (Display Driver Uninstaller), or roll back a version. If clean drivers do NOT stop it, swap-test the GPU (a failing card behaves exactly like this) - do not RMA on a guess.</p>
+<p class="search">search: Windows 11 NVIDIA GeForce RTX 3060 Ti display driver stopped responding TDR fix</p>
+</div>
+<div class="card">
+<div class="card-top"><span class="tier-tag tier-check">can't determine &middot; checklist</span><span class="conf c-ins">confidence: insufficient</span></div>
+<p class="title">37 unexpected restarts with no recorded cause - a frequent hard-reset pattern, the dominant symptom on this PC</p>
+<p class="ev for"><span class="mk">+</span> <span class="lbl">for:</span> Kernel-Power 41 fired 37 time(s) with bugcheck code 0 - Windows logged a hard restart but recorded no cause. A few of these over months is normal (an update reboot, a power blip, a manual force-off); a cluster is not.</p>
+<p class="ev for"><span class="mk">+</span> <span class="lbl">for:</span> Crash-dump creation failed 1 time(s) (volmgr Event 161) - the machine is dying too fast to finish writing a dump. That dump-write failure itself points at sudden power loss or a hard hang (PSU, GPU power, or thermal), not a clean software bug.</p>
+<p class="ev for"><span class="mk">+</span> <span class="lbl">for:</span> RAM is running above standard JEDEC speed (an XMP/DOCP/EXPO overclock is active) - test with it disabled; an unstable memory overclock is a common cause of no-dump restarts.</p>
+<p class="confirm"><span class="lbl">confirm by:</span> This is a symptom, not a diagnosis. Check in order: power (PSU, cables, wall outlet / surge protector), overheating (clean dust, verify temps), any overclock or XMP/DOCP profile, then enable full crash dumps (and disable auto-restart) so the next event is captured.</p>
+<p class="search">search: Windows 11 Kernel-Power 41 random restart no BSOD PSU thermal</p>
+</div>
+<div class="card">
+<div class="card-top"><span class="tier-tag tier-check">can't determine &middot; checklist</span><span class="conf c-ins">confidence: insufficient</span></div>
+<p class="title">This pattern may need hands-on hardware testing</p>
+<p class="ev for"><span class="mk">+</span> <span class="lbl">for:</span> Most of these restarts left no crash dump, so a read-only software scan has reached its limit. The remaining suspects - PSU health, GPU hardware, a no-POST - can only be confirmed physically, not from logs.</p>
+<p class="confirm"><span class="lbl">confirm by:</span> Cheap reversible checks, in order: (1) BIOS Load Optimized Defaults to drop any DOCP/XMP or CPU overclock; (2) swap-test the GPU (known-good card in, or this card in another PC) - a swap that fixes it is proof; do NOT buy or RMA on a guess; (3) swap-test the PSU if a spare exists; (4) if it ever fails to POST, read the motherboard CPU/DRAM/VGA/BOOT debug LEDs, reseat RAM and GPU, and clear CMOS; (5) watch temps in HWiNFO under load.</p>
+<p class="search">search: Windows 11 random restart no BSOD no dump PSU GPU swap test</p>
+</div>
+<div class="section-label">Ruled out this pass</div><div class="ruled"><ul>
+<li>Disk space - no volume is critically low.</li>
+<li>Windows Update - no recent update failures.</li>
+<li>Devices - no problem devices in Device Manager.</li>
+<li>Hardware-error log (WHEA) - clean.</li>
+</ul></div>
+<div class="section-label">System</div><div class="card"><table>
+<tr><td class="k">OS</td><td>Windows 11 Pro build 26100</td></tr>
+<tr><td class="k">Machine</td><td>ASUS System Product Name</td></tr>
+<tr><td class="k">CPU</td><td>AMD Ryzen 7 5800X 8-Core Processor</td></tr>
+<tr><td class="k">GPU</td><td>NVIDIA GeForce RTX 3060 Ti</td></tr>
+<tr><td class="k">RAM</td><td>32 GB - 3200 MT/s (XMP/DOCP active)</td></tr>
+<tr><td class="k">Uptime</td><td>2d 7h</td></tr>
+</table></div>
+<div class="section-label">Drives</div><div class="card"><table>
+<tr><td class="k">WD Blue SN570 1TB (SSD, 932 GB)</td><td>Healthy &middot; detailed SMART not exposed</td></tr>
+<tr><td class="k">WDC WD40EZAZ (HDD, 3726 GB)</td><td>Healthy &middot; detailed SMART not exposed</td></tr>
+</table></div>
+<div class="foot">This is a read-only second opinion, not a verdict. Confirm before acting. To go deeper, paste <span class="mono">out\ai-prompt.txt</span> (key identifiers removed, best-effort) into ChatGPT or Claude. The full report.html is NOT redacted - keep it between you and your helper.</div>
+</div></body></html>
+

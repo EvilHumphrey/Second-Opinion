@@ -1,0 +1,37 @@
+You are a senior Windows 11 PC repair technician. Below is a read-only diagnostic summary from a misbehaving PC, including a DETERMINISTIC, confidence-tiered list of likely culprits produced by a scorer. Do NOT re-rank it - keep the given order, tiers, and confidence. For each culprit in order, explain in plain English why it is implicated and the single cheapest next step to confirm it. If you disagree with the ranking or see something the scorer missed, raise it as a flagged question - do not silently reorder. Where evidence is marked insufficient, or a signal is noted as "could not be read" / "NOT checked", treat it as MISSING DATA (not clean) and say what to capture next instead of guessing. If a USER-REPORTED SYMPTOMS block is present below, treat it as ground truth from the machine's owner and reconcile the deterministic signals with it.
+
+=== SYSTEM ===
+OS: Windows 11 Pro build 26100
+Machine: ASUS System Product Name
+CPU: AMD Ryzen 7 5800X 8-Core Processor  |  RAM: 32 GB  |  uptime: 2d 7h
+GPU: NVIDIA GeForce RTX 3060 Ti
+RAM detail: 2 module(s) @ 3200 MT/s (XMP/DOCP profile appears active)
+
+=== CRASH SUMMARY (last 30 days) ===
+System crashes: 2 across 1 distinct stop code(s).
+ - 0x116 VIDEO_TDR_FAILURE  x2
+Unexpected restarts with no recorded cause (Kernel-Power 41, code 0): 37
+Application-level crash events: 3
+Note: All 2 system crashes share one stop code (0x116) - a consistent pattern leans toward a single software/driver cause.
+Note: Drive health - Windows reports basic status Healthy, but detailed SMART was not readable this run (2 of 2 drive(s)); run elevated to confirm. This is not a clean bill of drive health.
+
+=== RANKED CULPRITS (deterministic scorer - explain and pressure-test in order; do not reorder) ===
+1. [High] GPU display driver (NVIDIA GeForce RTX 3060 Ti)
+     for: GPU bugcheck(s) present: 0x116.
+     for: NVIDIA kernel driver reported 2 GPU reset/hang event(s) (Event 153/14) - direct evidence of GPU instability, not just a circumstantial code.
+     against: Drive health and the hardware-error log look clean - this points at the driver/GPU rather than a failing drive or CPU underneath.
+     confirm: Clean-reinstall the GPU driver with DDU (Display Driver Uninstaller), or roll back a version. If clean drivers do NOT stop it, swap-test the GPU (a failing card behaves exactly like this) - do not RMA on a guess.
+2. [Insufficient] 37 unexpected restarts with no recorded cause - a frequent hard-reset pattern, the dominant symptom on this PC
+     for: Kernel-Power 41 fired 37 time(s) with bugcheck code 0 - Windows logged a hard restart but recorded no cause. A few of these over months is normal (an update reboot, a power blip, a manual force-off); a cluster is not.
+     for: Crash-dump creation failed 1 time(s) (volmgr Event 161) - the machine is dying too fast to finish writing a dump. That dump-write failure itself points at sudden power loss or a hard hang (PSU, GPU power, or thermal), not a clean software bug.
+     for: RAM is running above standard JEDEC speed (an XMP/DOCP/EXPO overclock is active) - test with it disabled; an unstable memory overclock is a common cause of no-dump restarts.
+     confirm: This is a symptom, not a diagnosis. Check in order: power (PSU, cables, wall outlet / surge protector), overheating (clean dust, verify temps), any overclock or XMP/DOCP profile, then enable full crash dumps (and disable auto-restart) so the next event is captured.
+3. [Insufficient] This pattern may need hands-on hardware testing
+     for: Most of these restarts left no crash dump, so a read-only software scan has reached its limit. The remaining suspects - PSU health, GPU hardware, a no-POST - can only be confirmed physically, not from logs.
+     confirm: Cheap reversible checks, in order: (1) BIOS Load Optimized Defaults to drop any DOCP/XMP or CPU overclock; (2) swap-test the GPU (known-good card in, or this card in another PC) - a swap that fixes it is proof; do NOT buy or RMA on a guess; (3) swap-test the PSU if a spare exists; (4) if it ever fails to POST, read the motherboard CPU/DRAM/VGA/BOOT debug LEDs, reseat RAM and GPU, and clear CMOS; (5) watch temps in HWiNFO under load.
+
+=== ALREADY CHECKED THIS PASS (ruled out - do NOT re-recommend these without a specific new reason) ===
+ - Disk space - no volume is critically low.
+ - Windows Update - no recent update failures.
+ - Devices - no problem devices in Device Manager.
+ - Hardware-error log (WHEA) - clean.
