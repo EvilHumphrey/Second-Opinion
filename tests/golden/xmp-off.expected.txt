@@ -1,0 +1,7 @@
+counts crashes=0 distinct=0 unexplained=0 appcrash=0
+note | Performance tip (not a fault): RAM is running at 2133 MT/s but the modules are rated for 3200 MT/s - no XMP/DOCP/EXPO profile is active. Enabling it in BIOS is free performance once you confirm it stays stable. This does not change the stability findings above.
+ruled | Drive health - all drives report SMART status Healthy.
+ruled | Disk space - no volume is critically low.
+ruled | Windows Update - no recent update failures.
+ruled | Devices - no problem devices in Device Manager.
+ruled | Hardware-error log (WHEA) - clean.

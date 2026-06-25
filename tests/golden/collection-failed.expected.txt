@@ -1,0 +1,7 @@
+counts crashes=0 distinct=0 unexplained=0 appcrash=0
+note | Crash history - the System event log could not be read this run, so an absence of crashes below is NOT a clean bill. Re-run (elevated if needed).
+note | Drive health - the drive list could not be read this run (Get-PhysicalDisk failed); drives were NOT checked.
+note | Disk space - volumes could not be read this run; disk space was NOT checked.
+note | Windows Update - the update-failure log could not be read this run; update health was NOT checked.
+note | Devices - Device Manager could not be read this run; problem devices were NOT checked.
+note | Hardware-error log (WHEA) - could not be read this run; NOT checked.

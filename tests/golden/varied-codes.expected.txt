@@ -1,0 +1,8 @@
+counts crashes=3 distinct=3 unexplained=0 appcrash=0
+culprit | Memory / RAM | memory | 2 | Medium
+note | 3 crashes span 3 different stop codes - varied codes lean toward a hardware cause (RAM, power, or thermal).
+ruled | Drive health - all drives report SMART status Healthy.
+ruled | Disk space - no volume is critically low.
+ruled | Windows Update - no recent update failures.
+ruled | Devices - no problem devices in Device Manager.
+ruled | Hardware-error log (WHEA) - clean.

@@ -1,0 +1,43 @@
+{
+  "_comment": "MIGRATION TARGET, not yet wired in. In v0 the correlation rules live as functions in src/Invoke-SecondOpinion.ps1 (see DESIGN.md). This file documents the schema each rule will move to so the engine becomes data-driven (the moat: editable by the maintainer or an LLM after each real fix, no code change).",
+  "schemaVersion": 1,
+  "ruleSchema": {
+    "id": "kebab-case unique id",
+    "culprit": "human label shown as the node title",
+    "tierClass": "one of: drive | gpu | memory | storage | cpu | driver | software | power | app",
+    "when": "predicate over collected signals (counts, codes, statuses)",
+    "baseConfidence": "High | Medium | Low | Insufficient",
+    "raiseConfidenceIf": "conditions that corroborate (more independent signals)",
+    "lowerConfidenceIf": "conditions that argue against",
+    "minCrashesForHardwareClaim": 2,
+    "confirmBy": "the cheapest reversible confirmation step",
+    "whatWouldChangeThis": "what evidence would move the verdict",
+    "searchTemplate": "google/AI query seeded with the specific code/module"
+  },
+  "examples": [
+    {
+      "id": "gpu-tdr-cluster",
+      "culprit": "GPU display driver",
+      "tierClass": "gpu",
+      "when": "tdr4101Count >= 3 OR bugcheckIn(0x116,0x117,0x119) OR pnpCode43OnDisplayAdapter",
+      "baseConfidence": "Medium",
+      "raiseConfidenceIf": "tdr4101Count >= 5 OR (bugcheck 0x116/0x117 AND crashCount >= 2)",
+      "lowerConfidenceIf": "smartHealthy AND no thermal/WHEA events",
+      "confirmBy": "Clean-reinstall the GPU driver with DDU, or roll back to the pre-incident version.",
+      "whatWouldChangeThis": "If crashes persist after a clean driver reinstall, suspect the GPU hardware or PSU.",
+      "searchTemplate": "Windows 11 {bugcheckName} {gpuModule} TDR fix"
+    },
+    {
+      "id": "whea-uncorrectable",
+      "culprit": "Hardware (CPU / RAM / motherboard / power)",
+      "tierClass": "cpu",
+      "when": "bugcheckIn(0x124) OR wheaFatalCount >= 1",
+      "baseConfidence": "High",
+      "raiseConfidenceIf": "wheaCorrectedCount >= 3",
+      "lowerConfidenceIf": "",
+      "confirmBy": "Remove any CPU/RAM overclock or XMP/EXPO profile; verify temperatures and PSU.",
+      "whatWouldChangeThis": "Stability after disabling overclock points at an unstable profile rather than failing silicon.",
+      "searchTemplate": "Windows 11 WHEA_UNCORRECTABLE_ERROR 0x124 troubleshooting"
+    }
+  ]
+}

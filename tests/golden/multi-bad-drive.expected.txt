@@ -1,0 +1,7 @@
+counts crashes=0 distinct=0 unexplained=0 appcrash=0
+culprit | Drive health: WD Blue SN570 1TB | drive | 1 | High
+culprit | Drive health: Seagate ST2000DM | drive | 1 | High
+ruled | Disk space - no volume is critically low.
+ruled | Windows Update - no recent update failures.
+ruled | Devices - no problem devices in Device Manager.
+ruled | Hardware-error log (WHEA) - clean.

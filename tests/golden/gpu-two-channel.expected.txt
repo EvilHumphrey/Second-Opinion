@@ -1,0 +1,6 @@
+counts crashes=1 distinct=1 unexplained=0 appcrash=0
+culprit | GPU display driver | gpu | 1 | High
+ruled | Drive health - all drives report SMART status Healthy.
+ruled | Disk space - no volume is critically low.
+ruled | Windows Update - no recent update failures.
+ruled | Hardware-error log (WHEA) - clean.

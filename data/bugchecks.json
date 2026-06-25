@@ -1,0 +1,381 @@
+{
+  "_comment": "Bugcheck (BSOD stop-code) lookup. Keyed by normalized hex matching Invoke-SecondOpinion.ps1 Format-Bugcheck (0x## when <=0xFF, else 0x###...). Fields: name, class (scorer vocab: hardware|memory|storage|gpu|cpu|driver|software|power|mixed), hint, search. Built 2026-06-22 from Microsoft Learn bug-check reference + community heuristics via the kb-build workflow.",
+  "0x0A": {
+    "name": "IRQL_NOT_LESS_OR_EQUAL",
+    "class": "driver",
+    "hint": "Kernel code touched memory at too high an interrupt level, almost always a buggy driver or bad RAM; same driver named every crash points to the driver, varied names suggest memory.",
+    "search": "Windows 11 IRQL_NOT_LESS_OR_EQUAL 0x0A fix"
+  },
+  "0x18": {
+    "name": "REFERENCE_BY_POINTER",
+    "class": "driver",
+    "hint": "A driver mismanaged an object's reference count (released it once too often), corrupting kernel object state; update or remove the driver named in the dump.",
+    "search": "Windows 11 REFERENCE_BY_POINTER 0x18 fix"
+  },
+  "0x1A": {
+    "name": "MEMORY_MANAGEMENT",
+    "class": "memory",
+    "hint": "A severe memory-management fault; some parameter codes point at faulty RAM while others point at a buggy driver, so run Windows Memory Diagnostic first but treat varied parameters as a hardware hint.",
+    "search": "Windows 11 MEMORY_MANAGEMENT 0x1A fix"
+  },
+  "0x1E": {
+    "name": "KMODE_EXCEPTION_NOT_HANDLED",
+    "class": "driver",
+    "hint": "A kernel-mode program hit an error it could not handle, usually a faulty driver; the named module in the crash points to the culprit, and a recurring module means a software/driver fault.",
+    "search": "Windows 11 KMODE_EXCEPTION_NOT_HANDLED 0x1E fix"
+  },
+  "0x22": {
+    "name": "FILE_SYSTEM",
+    "class": "storage",
+    "hint": "A generic, rarely-seen file-system driver fault pointing at the storage stack; run !analyze, check Event Viewer for disk errors, and verify drive health with CHKDSK.",
+    "search": "Windows 11 FILE_SYSTEM bugcheck 0x22 fix"
+  },
+  "0x23": {
+    "name": "FAT_FILE_SYSTEM",
+    "class": "storage",
+    "hint": "A fault in the FAT/FASTFAT file-system driver, usually disk corruption or bad sectors on a FAT-formatted volume (common on USB/SD media); run CHKDSK /f /r on the affected drive.",
+    "search": "Windows 11 FAT_FILE_SYSTEM 0x23 fix"
+  },
+  "0x24": {
+    "name": "NTFS_FILE_SYSTEM",
+    "class": "storage",
+    "hint": "A fault in ntfs.sys, usually from disk corruption or bad sectors on an NTFS drive; if every crash names ntfs.sys it leans disk-corruption, so run CHKDSK and a drive self-test.",
+    "search": "Windows 11 NTFS_FILE_SYSTEM 0x24 fix"
+  },
+  "0x3B": {
+    "name": "SYSTEM_SERVICE_EXCEPTION",
+    "class": "driver",
+    "hint": "An exception hit while code crossed from user mode into the kernel, typically a driver dereferencing a bad/NULL pointer; a consistently named driver points to software, varied modules hint at memory.",
+    "search": "Windows 11 SYSTEM_SERVICE_EXCEPTION 0x3B fix"
+  },
+  "0x4D": {
+    "name": "NO_PAGES_AVAILABLE",
+    "class": "driver",
+    "hint": "No free physical pages remain, typically because a driver is leaking memory or holding too many pages locked; a single driver consistently consuming pages points to a software leak, not bad RAM.",
+    "search": "Windows 11 NO_PAGES_AVAILABLE 0x4D fix"
+  },
+  "0x4E": {
+    "name": "PFN_LIST_CORRUPT",
+    "class": "memory",
+    "hint": "The page-frame-number list is corrupted, usually because a driver passed a bad memory descriptor list, but bad RAM can also cause it; a consistent culprit driver across crashes points to software.",
+    "search": "Windows 11 PFN_LIST_CORRUPT 0x4E fix"
+  },
+  "0x50": {
+    "name": "PAGE_FAULT_IN_NONPAGED_AREA",
+    "class": "memory",
+    "hint": "Invalid or already-freed system memory was referenced; usually a faulty driver or bad RAM, though a corrupted NTFS volume is a documented cause, so same driver named = software, varied = test RAM and disk.",
+    "search": "Windows 11 PAGE_FAULT_IN_NONPAGED_AREA 0x50 fix"
+  },
+  "0x76": {
+    "name": "PROCESS_HAS_LOCKED_PAGES",
+    "class": "driver",
+    "hint": "A driver failed to release memory pages it locked for I/O when a process ended; enable TrackLockedPages or check the dump to find the leaking driver, then update it.",
+    "search": "Windows 11 PROCESS_HAS_LOCKED_PAGES 0x76 fix"
+  },
+  "0x77": {
+    "name": "KERNEL_STACK_INPAGE_ERROR",
+    "class": "storage",
+    "hint": "A kernel-stack page could not be read from disk, pointing to bad blocks, loose cabling, or a failing drive (sometimes bad RAM); status 0xC000009C/0xC000016A in parameter 2 means bad sectors.",
+    "search": "Windows 11 KERNEL_STACK_INPAGE_ERROR 0x77 fix"
+  },
+  "0x7A": {
+    "name": "KERNEL_DATA_INPAGE_ERROR",
+    "class": "storage",
+    "hint": "Kernel data could not be paged in from disk; parameter 2 usually names the cause (0xC000009C/0xC000016A = bad sectors, 0xC000009D = loose cabling), with failing RAM as a secondary suspect.",
+    "search": "Windows 11 KERNEL_DATA_INPAGE_ERROR 0x7A fix"
+  },
+  "0x7B": {
+    "name": "INACCESSIBLE_BOOT_DEVICE",
+    "class": "storage",
+    "hint": "Windows lost access to the system partition at startup, typically a boot-drive failure or wrong storage-controller driver (e.g. an AHCI-vs-RAID BIOS mode change); appears right at boot before logon.",
+    "search": "Windows 11 INACCESSIBLE_BOOT_DEVICE 0x7B fix"
+  },
+  "0x7E": {
+    "name": "SYSTEM_THREAD_EXCEPTION_NOT_HANDLED",
+    "class": "driver",
+    "hint": "A system thread generated an error nobody handled, typically an incompatible or corrupt driver named on the blue screen; a consistent module means update or roll back that driver.",
+    "search": "Windows 11 SYSTEM_THREAD_EXCEPTION_NOT_HANDLED 0x7E fix"
+  },
+  "0x7F": {
+    "name": "UNEXPECTED_KERNEL_MODE_TRAP",
+    "class": "hardware",
+    "hint": "The CPU generated a trap the kernel could not handle (often a double fault from stack overflow); a hardware-flavored trap code commonly indicates faulty RAM or a failing CPU/motherboard.",
+    "search": "Windows 11 UNEXPECTED_KERNEL_MODE_TRAP 0x7F fix"
+  },
+  "0x80": {
+    "name": "NMI_HARDWARE_FAILURE",
+    "class": "hardware",
+    "hint": "A non-maskable interrupt signalled a hardware malfunction hard to pin down; suspect failing RAM, motherboard, or other physical hardware and test components one at a time.",
+    "search": "Windows 11 NMI_HARDWARE_FAILURE 0x80 fix"
+  },
+  "0x8E": {
+    "name": "KERNEL_MODE_EXCEPTION_NOT_HANDLED",
+    "class": "driver",
+    "hint": "An unhandled kernel error, frequently a driver or failing hardware; if the same module repeats it is a driver, but random codes alongside it often mean bad RAM.",
+    "search": "Windows 11 KERNEL_MODE_EXCEPTION_NOT_HANDLED 0x8E fix"
+  },
+  "0x9C": {
+    "name": "MACHINE_CHECK_EXCEPTION",
+    "class": "cpu",
+    "hint": "The CPU raised a fatal machine-check exception (the legacy form of 0x124, mainly on older hardware), pointing at the processor, overclock, voltage, or thermal problems.",
+    "search": "Windows 11 MACHINE_CHECK_EXCEPTION 0x9C fix"
+  },
+  "0x9F": {
+    "name": "DRIVER_POWER_STATE_FAILURE",
+    "class": "power",
+    "hint": "A driver failed to complete a power transition (often sleep or wake) in time, usually a network, USB, storage, or GPU driver; the device blocking the power request is named in the dump.",
+    "search": "Windows 11 DRIVER_POWER_STATE_FAILURE 0x9F fix"
+  },
+  "0xA0": {
+    "name": "INTERNAL_POWER_ERROR",
+    "class": "power",
+    "hint": "The Windows power policy manager hit a fatal error, often during sleep/hibernate transitions; leads are power/chipset/battery drivers, a corrupt hiberfil, or buggy BIOS/ACPI firmware.",
+    "search": "Windows 11 INTERNAL_POWER_ERROR 0xA0 fix"
+  },
+  "0xA2": {
+    "name": "MEMORY_IMAGE_CORRUPT",
+    "class": "memory",
+    "hint": "The memory manager detected corruption in a loaded image's in-memory pages; because resident image corruption is often physical, faulty RAM is a prime suspect alongside a driver illegally writing memory.",
+    "search": "Windows 11 MEMORY_IMAGE_CORRUPT 0xA2 fix"
+  },
+  "0xAD": {
+    "name": "VIDEO_DRIVER_DEBUG_REPORT_REQUEST",
+    "class": "gpu",
+    "hint": "Not a true crash but a non-fatal minidump the video port created because the GPU driver requested a debug report; updating the graphics driver is the lead if these recur.",
+    "search": "Windows 11 VIDEO_DRIVER_DEBUG_REPORT_REQUEST 0xAD fix"
+  },
+  "0xB4": {
+    "name": "VIDEO_DRIVER_INIT_FAILURE",
+    "class": "gpu",
+    "hint": "Windows could not enter graphics mode because no display miniport driver would start, pointing to a missing, corrupt, or incompatible GPU driver; boot Safe Mode and reinstall the display driver.",
+    "search": "Windows 11 VIDEO_DRIVER_INIT_FAILURE 0xB4 fix"
+  },
+  "0xBE": {
+    "name": "ATTEMPTED_WRITE_TO_READONLY_MEMORY",
+    "class": "driver",
+    "hint": "A driver tried to write into a memory region marked read-only; the offending driver name is usually shown on the blue screen, so update or remove that driver.",
+    "search": "Windows 11 ATTEMPTED_WRITE_TO_READONLY_MEMORY 0xBE fix"
+  },
+  "0xC1": {
+    "name": "SPECIAL_POOL_DETECTED_MEMORY_CORRUPTION",
+    "class": "driver",
+    "hint": "Driver Verifier's special pool caught a driver writing outside its allocation; the backtrace of the current thread usually names the offending driver, and it appears mainly with Verifier enabled.",
+    "search": "Windows 11 SPECIAL_POOL_DETECTED_MEMORY_CORRUPTION 0xC1 fix"
+  },
+  "0xC2": {
+    "name": "BAD_POOL_CALLER",
+    "class": "driver",
+    "hint": "A driver made an illegal pool request (such as freeing the same block twice or freeing an unallocated address); a recurring driver name across crashes confirms the software culprit.",
+    "search": "Windows 11 BAD_POOL_CALLER 0xC2 fix"
+  },
+  "0xC4": {
+    "name": "DRIVER_VERIFIER_DETECTED_VIOLATION",
+    "class": "driver",
+    "hint": "The general Driver Verifier stop code raised when Verifier catches a driver breaking the rules; the violating driver is named in the dump, so update or remove it.",
+    "search": "Windows 11 DRIVER_VERIFIER_DETECTED_VIOLATION 0xC4 fix"
+  },
+  "0xC5": {
+    "name": "DRIVER_CORRUPTED_EXPOOL",
+    "class": "driver",
+    "hint": "The system touched invalid memory at high IRQL because a driver corrupted the system pool (small allocation); run Driver Verifier's special pool to name the consistent culprit driver.",
+    "search": "Windows 11 DRIVER_CORRUPTED_EXPOOL 0xC5 fix"
+  },
+  "0xC6": {
+    "name": "DRIVER_CAUGHT_MODIFYING_FREED_POOL",
+    "class": "driver",
+    "hint": "Driver Verifier caught a driver writing to pool memory it had already freed (a use-after-free); the dump's backtrace names the responsible module.",
+    "search": "Windows 11 DRIVER_CAUGHT_MODIFYING_FREED_POOL 0xC6 fix"
+  },
+  "0xC9": {
+    "name": "DRIVER_VERIFIER_IOMANAGER_VIOLATION",
+    "class": "driver",
+    "hint": "Driver Verifier's I/O checks caught a driver mishandling I/O requests; the offending driver is named in the crash, making this a clear driver fault to update or remove.",
+    "search": "Windows 11 DRIVER_VERIFIER_IOMANAGER_VIOLATION 0xC9 fix"
+  },
+  "0xCE": {
+    "name": "DRIVER_UNLOADED_WITHOUT_CANCELLING_PENDING_OPERATIONS",
+    "class": "driver",
+    "hint": "A driver unloaded while leaving timers, worker threads, or callbacks active, which then ran into freed memory; the responsible driver is named on the blue screen, so update or remove it.",
+    "search": "Windows 11 DRIVER_UNLOADED_WITHOUT_CANCELLING_PENDING_OPERATIONS 0xCE fix"
+  },
+  "0xD0": {
+    "name": "DRIVER_CORRUPTED_MMPOOL",
+    "class": "driver",
+    "hint": "Like 0xC5 but for a large allocation: a driver corrupted the memory-manager pool and the system accessed invalid memory at high IRQL; identify the driver with Driver Verifier's special pool.",
+    "search": "Windows 11 DRIVER_CORRUPTED_MMPOOL 0xD0 fix"
+  },
+  "0xD1": {
+    "name": "DRIVER_IRQL_NOT_LESS_OR_EQUAL",
+    "class": "driver",
+    "hint": "A kernel-mode driver accessed pageable or invalid memory at too high an interrupt level, the classic bad-driver crash; the driver named in the dump is the direct lead.",
+    "search": "Windows 11 DRIVER_IRQL_NOT_LESS_OR_EQUAL 0xD1 fix"
+  },
+  "0xD5": {
+    "name": "DRIVER_PAGE_FAULT_IN_FREED_SPECIAL_POOL",
+    "class": "driver",
+    "hint": "A driver touched memory it had already freed, caught by Special Pool diagnostics; the named driver is the cause, usually surfaced while running Driver Verifier.",
+    "search": "Windows 11 DRIVER_PAGE_FAULT_IN_FREED_SPECIAL_POOL 0xD5 fix"
+  },
+  "0xD6": {
+    "name": "DRIVER_PAGE_FAULT_BEYOND_END_OF_ALLOCATION",
+    "class": "driver",
+    "hint": "A driver read or wrote past the end of its memory buffer (a buffer overrun), caught by Special Pool; the named driver is the lead to update or remove.",
+    "search": "Windows 11 DRIVER_PAGE_FAULT_BEYOND_END_OF_ALLOCATION 0xD6 fix"
+  },
+  "0xEA": {
+    "name": "THREAD_STUCK_IN_DEVICE_DRIVER",
+    "class": "gpu",
+    "hint": "A driver thread is stuck spinning forever waiting on hardware, frequently a bad video card or display driver; the driver name is in parameter 3, same module repeating points to the driver, varied to a failing GPU.",
+    "search": "Windows 11 THREAD_STUCK_IN_DEVICE_DRIVER 0xEA video card fix"
+  },
+  "0xED": {
+    "name": "UNMOUNTABLE_BOOT_VOLUME",
+    "class": "storage",
+    "hint": "The I/O system tried to mount the boot volume and failed, usually a failing boot drive or corrupted file system/boot record; CHKDSK /r and bootrec are the standard repair leads.",
+    "search": "Windows 11 UNMOUNTABLE_BOOT_VOLUME 0xED fix"
+  },
+  "0xEF": {
+    "name": "CRITICAL_PROCESS_DIED",
+    "class": "software",
+    "hint": "A process Windows can't run without (csrss.exe, wininit.exe, services.exe) died or got corrupted; if the same process is named across crashes suspect software/corruption, and run SFC /scannow.",
+    "search": "Windows 11 CRITICAL_PROCESS_DIED 0xEF fix"
+  },
+  "0xF4": {
+    "name": "CRITICAL_OBJECT_TERMINATION",
+    "class": "storage",
+    "hint": "A process or thread critical to Windows died, very commonly because the OS could not read it back from a failing or disconnecting boot drive; check disk/SATA-NVMe connection and drive health first.",
+    "search": "Windows 11 CRITICAL_OBJECT_TERMINATION 0xF4 fix"
+  },
+  "0xFE": {
+    "name": "BUGCODE_USB_DRIVER",
+    "class": "driver",
+    "hint": "A fatal error in the USB stack or a USB device driver; suspect the USB controller driver or a misbehaving device, and try unplugging devices or updating the USB driver.",
+    "search": "Windows 11 BUGCODE_USB_DRIVER 0xFE fix"
+  },
+  "0x101": {
+    "name": "CLOCK_WATCHDOG_TIMEOUT",
+    "class": "cpu",
+    "hint": "One CPU core stopped responding to clock interrupts (deadlocked or hung), typically an unstable overclock, bad CPU/voltage, or failing processor rather than a single driver.",
+    "search": "Windows 11 CLOCK_WATCHDOG_TIMEOUT 0x101 fix"
+  },
+  "0x102": {
+    "name": "DPC_WATCHDOG_TIMEOUT",
+    "class": "driver",
+    "hint": "The DPC watchdog routine did not run in its allotted time, usually a hung driver or unresponsive hardware (often storage); same module every dump = software, varied = suspect hardware.",
+    "search": "Windows 11 DPC_WATCHDOG_TIMEOUT 0x102 fix"
+  },
+  "0x109": {
+    "name": "CRITICAL_STRUCTURE_CORRUPTION",
+    "class": "mixed",
+    "hint": "Something modified protected kernel code or data, which can be an incompatible driver, anti-cheat/security software, or faulty RAM; if it changes crash-to-crash run a memory test.",
+    "search": "Windows 11 CRITICAL_STRUCTURE_CORRUPTION 0x109 fix"
+  },
+  "0x10E": {
+    "name": "VIDEO_MEMORY_MANAGEMENT_INTERNAL",
+    "class": "gpu",
+    "hint": "The video memory manager (VidMm) hit an unrecoverable condition usually caused by a video driver behaving improperly, so update or cleanly reinstall the GPU driver; a consistent parameter-1 isolates the fault.",
+    "search": "Windows 11 VIDEO_MEMORY_MANAGEMENT_INTERNAL 0x10E fix"
+  },
+  "0x113": {
+    "name": "VIDEO_DXGKRNL_FATAL_ERROR",
+    "class": "gpu",
+    "hint": "The DirectX graphics kernel (dxgkrnl.sys) detected a fatal violation, typically triggered by the GPU driver; if the same display driver appears across crashes, a clean reinstall of the graphics driver is the usual fix.",
+    "search": "Windows 11 VIDEO_DXGKRNL_FATAL_ERROR 0x113 fix"
+  },
+  "0x116": {
+    "name": "VIDEO_TDR_FAILURE",
+    "class": "gpu",
+    "hint": "The GPU stopped responding and Windows' display-driver reset (TDR) failed; same faulting module across crashes (nvlddmkm=NVIDIA, amdkmdag/atikmpag=AMD, igdkmd=Intel) points to a driver/GPU fault, varied to power, heat, or overclock.",
+    "search": "Windows 11 VIDEO_TDR_FAILURE 0x116 nvlddmkm fix"
+  },
+  "0x117": {
+    "name": "VIDEO_TDR_TIMEOUT_DETECTED",
+    "class": "gpu",
+    "hint": "The display driver failed to respond in time (a graphics hang) captured as a live dump; the named driver module (nvlddmkm/atikmpag) is the lead, same module repeating points to a driver, varied to cooling/power/overclock.",
+    "search": "Windows 11 VIDEO_TDR_TIMEOUT_DETECTED 0x117 display driver fix"
+  },
+  "0x119": {
+    "name": "VIDEO_SCHEDULER_INTERNAL_ERROR",
+    "class": "gpu",
+    "hint": "The video scheduler caught a fatal violation, usually a misbehaving GPU driver, but parameter-1 values like 0x400/0x1000/0xA000/0x10000 flag memory corruption or bad hardware, so a stable parameter-1 says whether to update the driver or test RAM/GPU.",
+    "search": "Windows 11 VIDEO_SCHEDULER_INTERNAL_ERROR 0x119 fix"
+  },
+  "0x122": {
+    "name": "WHEA_INTERNAL_ERROR",
+    "class": "hardware",
+    "hint": "An internal failure inside the Windows Hardware Error Architecture itself, usually a buggy vendor PSHED plug-in or faulty platform/BIOS firmware; a BIOS/firmware update is the usual lead.",
+    "search": "Windows 11 WHEA_INTERNAL_ERROR 0x122 fix"
+  },
+  "0x124": {
+    "name": "WHEA_UNCORRECTABLE_ERROR",
+    "class": "hardware",
+    "hint": "A fatal hardware error the CPU reported through WHEA, almost always failing/overheating/overclocked hardware (CPU, RAM, or motherboard); varied WHEA details across crashes suspect hardware, not software.",
+    "search": "Windows 11 WHEA_UNCORRECTABLE_ERROR 0x124 fix"
+  },
+  "0x12B": {
+    "name": "FAULTY_HARDWARE_CORRUPTED_PAGE",
+    "class": "memory",
+    "hint": "A single-bit memory error hardware could not correct, pointing to defective RAM or a memory controller; run MemTest86/Windows Memory Diagnostic and reseat or swap the DIMMs.",
+    "search": "Windows 11 FAULTY_HARDWARE_CORRUPTED_PAGE 0x12B fix"
+  },
+  "0x133": {
+    "name": "DPC_WATCHDOG_VIOLATION",
+    "class": "driver",
+    "hint": "A DPC/ISR or the system spent too long at high IRQL, classically caused by old SSD firmware or a storage/chipset driver; a recurring single driver name confirms the software lead.",
+    "search": "Windows 11 DPC_WATCHDOG_VIOLATION 0x133 fix SSD firmware"
+  },
+  "0x139": {
+    "name": "KERNEL_SECURITY_CHECK_FAILURE",
+    "class": "mixed",
+    "hint": "The kernel caught a corrupted data structure (a security integrity check failed), usually a buggy driver; same module across crashes = software/driver, varied = suspect failing RAM.",
+    "search": "Windows 11 KERNEL_SECURITY_CHECK_FAILURE 0x139 fix"
+  },
+  "0x141": {
+    "name": "VIDEO_ENGINE_TIMEOUT_DETECTED",
+    "class": "gpu",
+    "hint": "One of the GPU's display engines failed to respond in time, recorded as a live dump (LiveKernelEvent 141); the named driver module is the lead, same module repeating points to a driver, varied to overheating, power, or an unstable GPU.",
+    "search": "Windows 11 VIDEO_ENGINE_TIMEOUT_DETECTED 141 LiveKernelEvent fix"
+  },
+  "0x143": {
+    "name": "PROCESSOR_DRIVER_INTERNAL",
+    "class": "cpu",
+    "hint": "The processor power-management driver hit an internal error, typically tied to CPU power/throttling firmware or chipset; updating BIOS and chipset/processor drivers is the lead.",
+    "search": "Windows 11 PROCESSOR_DRIVER_INTERNAL 0x143 fix"
+  },
+  "0x149": {
+    "name": "REFS_FILE_SYSTEM",
+    "class": "storage",
+    "hint": "A file-system error in the ReFS driver (used on Storage Spaces/data volumes), typically on-disk metadata corruption or a failing drive; check the ReFS volume and underlying disk health.",
+    "search": "Windows 11 REFS_FILE_SYSTEM 0x149 fix"
+  },
+  "0x154": {
+    "name": "UNEXPECTED_STORE_EXCEPTION",
+    "class": "storage",
+    "hint": "The kernel memory-store component hit an unexpected exception, most often a failing SSD/HDD, outdated drive firmware, or aggressive disk power settings; update SSD firmware and disable PCIe link-state power management first.",
+    "search": "Windows 11 UNEXPECTED_STORE_EXCEPTION 0x154 fix"
+  },
+  "0x17E": {
+    "name": "MICROCODE_REVISION_MISMATCH",
+    "class": "cpu",
+    "hint": "CPU cores ended up running different microcode versions because firmware updated only some processors; the fix is a BIOS/firmware update from the board or PC vendor.",
+    "search": "Windows 11 MICROCODE_REVISION_MISMATCH 0x17E fix"
+  },
+  "0x1CA": {
+    "name": "SYNTHETIC_WATCHDOG_TIMEOUT",
+    "class": "mixed",
+    "hint": "A system-wide watchdog fired because the machine hung and stopped processing timer ticks; needs dump analysis to find what froze it (often a driver stuck at high IRQL or a hardware stall).",
+    "search": "Windows 11 SYNTHETIC_WATCHDOG_TIMEOUT 0x1CA fix"
+  },
+  "0x1DF": {
+    "name": "PROCESSOR_START_TIMEOUT",
+    "class": "cpu",
+    "hint": "A processor core failed to start in the expected time during boot or hotplug, indicating a CPU, firmware, or platform initialization problem rather than ordinary software.",
+    "search": "Windows 11 PROCESSOR_START_TIMEOUT 0x1DF fix"
+  },
+  "0xC000021A": {
+    "name": "WINLOGON_FATAL_ERROR",
+    "class": "software",
+    "hint": "A user-mode security process (Winlogon or CSRSS) died or was tampered with, so Windows shut down; commonly mismatched/corrupt system files or a bad update, so try SFC /scannow and Safe Mode.",
+    "search": "Windows 11 WINLOGON_FATAL_ERROR 0xC000021A fix"
+  }
+}

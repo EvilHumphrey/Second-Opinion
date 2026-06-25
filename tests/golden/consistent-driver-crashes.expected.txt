@@ -1,0 +1,8 @@
+counts crashes=3 distinct=1 unexplained=0 appcrash=0
+culprit | A specific driver or software (0xD1 DRIVER_IRQL_NOT_LESS_OR_EQUAL) | driver | 2 | Medium
+note | All 3 system crashes share one stop code (0xD1) - a consistent pattern leans toward a single software/driver cause.
+ruled | Drive health - all drives report SMART status Healthy.
+ruled | Disk space - no volume is critically low.
+ruled | Windows Update - no recent update failures.
+ruled | Devices - no problem devices in Device Manager.
+ruled | Hardware-error log (WHEA) - clean.

@@ -1,0 +1,6 @@
+counts crashes=0 distinct=0 unexplained=0 appcrash=0
+culprit | Hardware fault (CPU / RAM / motherboard / power) | cpu | 1 | High
+ruled | Drive health - all drives report SMART status Healthy.
+ruled | Disk space - no volume is critically low.
+ruled | Windows Update - no recent update failures.
+ruled | Devices - no problem devices in Device Manager.

@@ -1,0 +1,8 @@
+counts crashes=1 distinct=1 unexplained=0 appcrash=0
+culprit | Hardware fault (CPU / RAM / motherboard / power) | cpu | 1 | High
+note | Uncontrolled variable: you report a manual overclock and/or an undervolt is active. An unstable overclock or too-aggressive undervolt produces exactly these random crashes / WHEA errors / no-dump restarts. Reset to stock (BIOS Load Optimized Defaults; clear any Afterburner / Ryzen Master profile) and re-test before trusting ANY hardware conclusion here.
+ruled | Drive health - all drives report SMART status Healthy.
+ruled | Disk space - no volume is critically low.
+ruled | Windows Update - no recent update failures.
+ruled | Devices - no problem devices in Device Manager.
+ruled | Hardware-error log (WHEA) - clean.

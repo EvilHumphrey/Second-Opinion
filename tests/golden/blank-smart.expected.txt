@@ -1,0 +1,6 @@
+counts crashes=0 distinct=0 unexplained=0 appcrash=0
+note | Drive health - Windows reports basic status Healthy, but detailed SMART was not readable this run (1 of 1 drive(s)); run elevated to confirm. This is not a clean bill of drive health.
+ruled | Disk space - no volume is critically low.
+ruled | Windows Update - no recent update failures.
+ruled | Devices - no problem devices in Device Manager.
+ruled | Hardware-error log (WHEA) - clean.

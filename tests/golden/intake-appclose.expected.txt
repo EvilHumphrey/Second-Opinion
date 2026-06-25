@@ -1,0 +1,8 @@
+counts crashes=0 distinct=0 unexplained=0 appcrash=3
+culprit | Application keeps crashing: game.exe | app | 2 | Medium
+note | User reports the app closes to the desktop while the rest of the PC keeps running - that is an application-level fault, not a system crash/BSOD. Weight the app and driver suspects above the system-crash ones.
+ruled | Drive health - all drives report SMART status Healthy.
+ruled | Disk space - no volume is critically low.
+ruled | Windows Update - no recent update failures.
+ruled | Devices - no problem devices in Device Manager.
+ruled | Hardware-error log (WHEA) - clean.

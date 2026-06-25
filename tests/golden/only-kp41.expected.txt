@@ -1,0 +1,6 @@
+counts crashes=0 distinct=0 unexplained=37 appcrash=0
+culprit | 37 unexpected restarts with no recorded cause - a frequent hard-reset pattern, the dominant symptom on this PC | power | checklist | Insufficient prom=37
+culprit | This pattern may need hands-on hardware testing | handoff | checklist | Insufficient
+ruled | Windows Update - no recent update failures.
+ruled | Devices - no problem devices in Device Manager.
+ruled | Hardware-error log (WHEA) - clean.
