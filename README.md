@@ -18,6 +18,10 @@ over Quick Assist) and sends back a file.
 
 ### See what it produces — before you run anything
 
+[![Sample Second Opinion report: a GPU display driver ranked tier-1, the dump-less restarts kept as an honest checklist, evidence for and against, a ruled-out section, and the system/drive tables](docs/sample-report.png)](docs/sample-report.html)
+
+> Synthetic data (fake PC name and user), a real-shaped result. Click the image for the live `report.html`.
+
 - **[`docs/sample-report.html`](docs/sample-report.html)** — download it and open in a browser. Synthetic
   data (fake PC name, fake user), a real-shaped result: a GPU-driver culprit ranked tier-1, the dump-less
   restarts kept as an honest checklist, evidence for/against, and the cheapest "confirm by" step.
