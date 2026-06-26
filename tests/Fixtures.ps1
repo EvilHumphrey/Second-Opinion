@@ -63,9 +63,9 @@ function _data($h) {
 function Get-Fixtures {
     $f = [ordered]@{}
 
-    # gpu-failure-01: a GPU-failure case. 2x 0x116 (>2 min apart, so they don't dedupe) + 37x Kernel-Power
-    # 41 code-0; 3 app crashes across DIFFERENT apps (so no app-cluster node); two Healthy drives with
-    # detailed SMART not readable (non-elevated run); everything else clean.
+    # gpu-failure-01: the real case. 2x 0x116 (>2 min apart, so they don't dedupe) + 37x Kernel-Power 41
+    # code-0; 3 app crashes across DIFFERENT apps (so no app-cluster node, matching his real report);
+    # two Healthy drives with detailed SMART not readable (non-elevated run); everything else clean.
     $gpuFailure01Crashes = @( (_crash -2880 'BugCheck 1001' '0x116'), (_crash 0 'BugCheck 1001' '0x116') )
     for ($i = 1; $i -le 37; $i++) { $gpuFailure01Crashes += (_crash (-($i * 30)) 'Kernel-Power 41' $null) }
     $f['gpu-failure-01'] = _data @{
@@ -82,6 +82,23 @@ function Get-Fixtures {
     # lone-0x116: a single TDR bugcheck with no other GPU signal must stay Medium, never High.
     $f['lone-0x116'] = _data @{
         Crashes = @( (_crash 0 'BugCheck 1001' '0x116') )
+        Drives  = @( (_drive 'Generic SSD' 'SSD' 500 'Healthy' $true) )
+        Volumes = @( (_vol 'C:' 200 465 $false) )
+    }
+
+    # rapid-repeat-same-code: two real WER BugCheck 1001 records with the same code inside two minutes
+    # are two crashes, not a WER/KP41 double-log. This must preserve CrashCount=2 so recurring GPU
+    # bugchecks reach tier 1 / High instead of being silently demoted.
+    $f['rapid-repeat-same-code'] = _data @{
+        Crashes = @( (_crash 0 'BugCheck 1001' '0x116'), (_crash 1 'BugCheck 1001' '0x116') )
+        Drives  = @( (_drive 'Generic SSD' 'SSD' 500 'Healthy' $true) )
+        Volumes = @( (_vol 'C:' 200 465 $false) )
+    }
+
+    # same-crash-wer-kp41: one WER BugCheck 1001 and one coded Kernel-Power 41 of the same code inside
+    # the two-minute window are a double-log of the same crash and must still count once.
+    $f['same-crash-wer-kp41'] = _data @{
+        Crashes = @( (_crash 0 'BugCheck 1001' '0x116'), (_crash 1 'Kernel-Power 41' '0x116') )
         Drives  = @( (_drive 'Generic SSD' 'SSD' 500 'Healthy' $true) )
         Volumes = @( (_vol 'C:' 200 465 $false) )
     }
@@ -170,8 +187,8 @@ function Get-Fixtures {
         GpuModel       = 'NVIDIA GeForce RTX 4070'
     }
 
-    # gpu-failure-01-intake: the gpu-failure-01 data PLUS a deterministic intake (whole-PC reboot, under
-    # gaming load, clean Windows reinstall + DDU already done, DOCP/XMP on). The clean-install answer must add
+    # gpu-failure-01-intake: the gpu-failure-01 data PLUS a deterministic intake (whole-PC reboot, under gaming
+    # load, clean Windows reinstall + DDU already done, DOCP/XMP on). The clean-install answer must add
     # the "software effectively ruled out" evidence to the GPU node and drop the now-redundant DDU
     # confirm step; the XMP-only tweak must NOT raise the manual-OC/undervolt note; and tier/confidence
     # must be unchanged (intake never moves the ranking).
@@ -313,6 +330,42 @@ function Get-Fixtures {
         Volumes         = @( (_vol 'C:' 200 465 $false) )
     }
 
+    # whea-corrected: corrected/non-fatal WHEA events with NO fatal and no 0x124 - rule B does not fire,
+    # so there is no culprit, and (Total>0) the WHEA "clean" ruled-out also does not fire. Before the
+    # Observed channel this VANISHED and the box read clean (the verified false-clean). Now it must
+    # surface as an Observed weak signal AND suppress the clean banner. (Codex risk #1 + workflow.)
+    $f['whea-corrected'] = _data @{
+        Whea    = (_whea 0 12 12)
+        Drives  = @( (_drive 'Generic SSD' 'SSD' 500 'Healthy' $true) )
+        Volumes = @( (_vol 'C:' 200 465 $false) )
+    }
+
+    # subthreshold-storage: 2 disk/controller I/O events, below the >=3 threshold for a storage culprit
+    # and with no storage bugcheck. Must surface as Observed (seen, not enough), not vanish into clean.
+    $f['subthreshold-storage'] = _data @{
+        StorageEvents = @( 'disk-7', 'disk-153' )
+        Drives        = @( (_drive 'Generic SSD' 'SSD' 500 'Healthy' $true) )
+        Volumes       = @( (_vol 'C:' 200 465 $false) )
+    }
+
+    # update-failures: nonzero Windows Update failures - previously neither ruled-out (only 0 was) nor a
+    # culprit, so they vanished. Now an Observed weak signal.
+    $f['update-failures'] = _data @{
+        UpdateFailures = 3
+        Drives         = @( (_drive 'Generic SSD' 'SSD' 500 'Healthy' $true) )
+        Volumes        = @( (_vol 'C:' 200 465 $false) )
+    }
+
+    # blind-run: most CORE collectors unreadable (a locked-down / busy box where reads fail). The headline
+    # must say MISSING DATA (severity 'blind') and BlindRun must be true - never imply a clean result.
+    $f['blind-run'] = _data @{
+        CrashesReadable = $false
+        DrivesReadable  = $false
+        VolumesReadable = $false
+        UpdatesReadable = $false
+        Whea            = (_whea 0 0 0 $false)
+    }
+
     # empty: a clean machine -> zero culprits.
     $f['empty'] = _data @{}
 
@@ -328,6 +381,7 @@ function Get-Fingerprint($diag) {
         $lines += "culprit | $($c.Title) | $($c.TierClass) | $($c.Tier) | $($c.Confidence)$prom"
     }
     foreach ($n in @($diag.Notes))    { $lines += "note | $n" }
+    foreach ($o in @($diag.Observed)) { $lines += "observed | $o" }
     foreach ($r in @($diag.RuledOut)) { $lines += "ruled | $r" }
     return ($lines -join "`n")
 }

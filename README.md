@@ -53,6 +53,17 @@ Options:
 - `-OpenReport` — open the HTML report when done.
 - `-NoRedact` — leave the AI prompt un-redacted (off by default; redaction is on).
 
+**Or run it as a single file:** `src/Invoke-SecondOpinion.ps1` is self-contained (it embeds the bugcheck
+knowledge base), so you can download just that one file and run it from any terminal — no folder, nothing to
+install:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\Invoke-SecondOpinion.ps1
+```
+
+Run it in an **elevated** PowerShell for the deeper SSD/device detail; a standard window works too and the
+report says what it couldn't read. A standalone run writes `out/` next to the script.
+
 </details>
 
 ## What it touches (and what it never touches)
@@ -127,10 +138,10 @@ identifier that survives into `ai-prompt.txt`? That's a bug worth reporting — 
 
 ## Trust the ranking (run the tests)
 
-The scorer is deterministic and guarded by a fixture harness — 27 snapshot fixtures plus 65 guardrail
+The scorer is deterministic and guarded by a fixture harness — 33 snapshot fixtures plus 97 guardrail
 assertions that must always hold (e.g. *a single GPU bugcheck is never tier-1*, *blank SMART is never
-"healthy"*, *dump-less restarts never reach High*, *a hostile device name can't inject HTML or AI-prompt
-instructions*). Run them yourself:
+"healthy"*, *dump-less restarts never reach High*, *real-but-sub-threshold signals never read as "clean"*,
+*a hostile device name can't inject HTML or AI-prompt instructions*). Run them yourself:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\Run-Fixtures.ps1

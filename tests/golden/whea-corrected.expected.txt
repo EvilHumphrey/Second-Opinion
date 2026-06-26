@@ -1,0 +1,6 @@
+counts crashes=0 distinct=0 unexplained=0 appcrash=0
+observed | Hardware-error log (WHEA): 12 non-fatal/corrected event(s) seen. Not a fault on its own (often thermal, power, or a marginal RAM/XMP overclock), but the WHEA log is NOT clean. It escalates to a hardware suspect if the count keeps climbing or a fatal WHEA appears - re-test with any XMP/EXPO profile and overclock disabled.
+ruled | Drive health - all drives report SMART status Healthy.
+ruled | Disk space - no volume is critically low.
+ruled | Windows Update - no recent update failures.
+ruled | Devices - no problem devices in Device Manager.
