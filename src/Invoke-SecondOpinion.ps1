@@ -26,7 +26,7 @@ param(
 )
 
 $ErrorActionPreference = 'Continue'
-$ScriptVersion = '0.3.0'
+$ScriptVersion = '0.3.1'
 
 # ---------------------------------------------------------------------------
 # Paths + knowledge base

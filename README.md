@@ -58,6 +58,9 @@ Options:
 - `-HelperPacket` — *(optional)* also write a shareable, always-redacted **case packet** to `out\packet\` (a
   forum/Discord-safe summary, a schema-versioned evidence JSON, a redaction audit, and an unreadable-signals
   list), each stamped with the tool version + KB hash.
+- `-Baseline <path>` — *(optional)* compare this run against a saved `redacted-evidence.json` from a prior run
+  and add a **"what changed since the baseline"** section (notes only — it never changes the ranking; honest
+  when the baseline is missing or unreadable).
 
 **Or run it as a single file:** `src/Invoke-SecondOpinion.ps1` is self-contained (it embeds the bugcheck
 knowledge base), so you can download just that one file and run it from any terminal — no folder, nothing to
