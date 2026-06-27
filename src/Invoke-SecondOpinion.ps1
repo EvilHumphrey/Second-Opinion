@@ -26,7 +26,7 @@ param(
 )
 
 $ErrorActionPreference = 'Continue'
-$ScriptVersion = '0.3.1'
+$ScriptVersion = '0.3.2'
 
 # ---------------------------------------------------------------------------
 # Paths + knowledge base
@@ -721,6 +721,14 @@ function Find-DumpModuleForParameters($modules, $parameters) {
     return $null
 }
 
+function ConvertTo-SafeBugcheckCode($hex) {
+    # A bugcheck code is 32-bit; a corrupt / foreign-arch / hostile dump can yield an over-long hex token.
+    # Guard the conversion so a bad token ABSTAINS (returns $null = no code parsed) instead of overflowing
+    # Int64 and throwing - an unhandled throw here would otherwise abort the whole -DeepDump collection.
+    $clean = ([string]$hex) -replace '`', ''
+    try { return Format-Bugcheck ([Convert]::ToInt64($clean, 16)) } catch { return $null }
+}
+
 function ConvertFrom-DebuggerDumpText($text) {
     $modules = @()
     $params = @($null, $null, $null, $null)
@@ -729,11 +737,11 @@ function ConvertFrom-DebuggerDumpText($text) {
 
     foreach ($line in (([string]$text) -split "`r?`n")) {
         if ($line -match '(?i)BugCheck\s+([0-9A-F`]+)\s*,\s*\{([^}]*)\}') {
-            $bugcheck = Format-Bugcheck ([Convert]::ToInt64(($matches[1] -replace '`', ''), 16))
+            $bugcheck = ConvertTo-SafeBugcheckCode $matches[1]
             $parts = @($matches[2] -split ',')
             for ($i = 0; $i -lt [math]::Min(4, $parts.Count); $i++) { $params[$i] = $parts[$i].Trim() }
         } elseif ($line -match '(?i)Bugcheck code\s+([0-9A-F`]+)') {
-            $bugcheck = Format-Bugcheck ([Convert]::ToInt64(($matches[1] -replace '`', ''), 16))
+            $bugcheck = ConvertTo-SafeBugcheckCode $matches[1]
         } elseif ($line -match '(?i)^Arguments\s+(.+)$') {
             $parts = @($matches[1] -split '[,\s]+')
             $pi = 0
@@ -849,7 +857,9 @@ function Read-DumpHeaderInfo($dumpPath) {
         $sig = [System.Text.Encoding]::ASCII.GetString($buf, 0, 4)
         $valid = [System.Text.Encoding]::ASCII.GetString($buf, 4, 4)
         if ($sig -eq 'PAGE' -and $valid -eq 'DU64') {
+            if ($read -lt 0x60) { return $null }   # DU64 params run through byte 0x60; a truncated header would read zero-fill
             $code = [BitConverter]::ToUInt32($buf, 0x38)
+            if ($code -eq 0) { return $null }       # 0x00 is not a real bugcheck (zeroed / truncated header), do not fabricate one
             $params = @(
                 ('{0:x}' -f [BitConverter]::ToUInt64($buf, 0x40)),
                 ('{0:x}' -f [BitConverter]::ToUInt64($buf, 0x48)),
@@ -860,6 +870,7 @@ function Read-DumpHeaderInfo($dumpPath) {
         }
         if ($sig -eq 'PAGE' -and $valid -eq 'DUMP') {
             $code = [BitConverter]::ToUInt32($buf, 0x28)
+            if ($code -eq 0) { return $null }       # same: a zeroed/truncated 32-bit header is not a 0x00 bugcheck
             $params = @(
                 ('{0:x}' -f [BitConverter]::ToUInt32($buf, 0x2c)),
                 ('{0:x}' -f [BitConverter]::ToUInt32($buf, 0x30)),
@@ -2039,7 +2050,10 @@ function New-Diagnosis($data) {
 function Add-NameRedaction($map, $value, $replacement) {
     if (-not $value) { return }
     $s = ([string]$value).Trim()
-    if ($s.Length -lt 3) { return }
+    # >= 2 chars: a 2-char Windows account/host name (Jo, AJ, Ed) is real PII and must be masked in the
+    # share-safe packet. The token-boundary pattern below keeps prose substrings intact (e.g. 'al' redacts the
+    # standalone word but not 'algorithm'). 1-char names are excluded - as a whole token they shred ordinary prose.
+    if ($s.Length -lt 2) { return }
     $map["(?<![A-Za-z0-9_])$([regex]::Escape($s))(?![A-Za-z0-9_])"] = $replacement
 }
 
@@ -2554,17 +2568,38 @@ function Compare-SoEvidence($baselineObj, $diag) {
         $lines += 'Version note: the baseline ToolVersion or KbHash differs from this run. The diff still runs, but tool/KB changes can make some deltas definitional rather than real.'
     }
 
+    # Readability maps (signal -> bool) for BOTH runs, built UP FRONT so the numeric deltas can ABSTAIN on an
+    # unreadable signal. An unreadable count is stored as 0, so a readable baseline of 8 vs an unreadable
+    # current 0 would otherwise emit a false-good "activity dropped from 8 to 0" line (a honest-abstention break).
+    $baseRead = @{}
+    foreach ($r in @((Get-SoPathValue $baselineObj @('Readability') @()))) {
+        $sig = [string](Get-SoPathValue $r @('Signal') '')
+        if ($sig) { $baseRead[$sig] = ConvertTo-SoBool (Get-SoPathValue $r @('Readable') $false) }
+    }
+    $curRead = @{}
+    foreach ($r in @((Get-SoPathValue $current @('Readability') @()))) {
+        $sig = [string](Get-SoPathValue $r @('Signal') '')
+        if ($sig) { $curRead[$sig] = ConvertTo-SoBool (Get-SoPathValue $r @('Readable') $false) }
+    }
+
     $numericChecks = @(
-        @{ Label = 'System crash count';         Path = @('Counts', 'CrashCount');       Up = 'new crash volume appeared since the baseline'; Down = 'crash volume resolved or aged out since the baseline' }
-        @{ Label = 'Distinct stop-code count';   Path = @('Counts', 'DistinctCodes');    Up = 'new stop-code variety appeared since the baseline'; Down = 'stop-code variety narrowed or aged out since the baseline' }
-        @{ Label = 'WHEA total event count';     Path = @('Trend', 'Whea', 'Total');     Up = 'new hardware-error log activity appeared since the baseline'; Down = 'hardware-error log activity dropped since the baseline' }
-        @{ Label = 'WHEA fatal event count';     Path = @('Trend', 'Whea', 'Fatal');     Up = 'new fatal WHEA activity appeared since the baseline'; Down = 'fatal WHEA activity dropped since the baseline' }
-        @{ Label = 'WHEA corrected event count'; Path = @('Trend', 'Whea', 'Corrected'); Up = 'new corrected WHEA activity appeared since the baseline'; Down = 'corrected WHEA activity dropped since the baseline' }
-        @{ Label = 'TDR count';                  Path = @('Trend', 'Tdr', 'Count');      Up = 'new display-driver timeout activity appeared since the baseline'; Down = 'display-driver timeout activity dropped since the baseline' }
-        @{ Label = 'Application crash count';    Path = @('Counts', 'AppCrashCount');    Up = 'new app-crash volume appeared since the baseline'; Down = 'app-crash volume resolved or aged out since the baseline' }
-        @{ Label = 'Unexplained restart count';  Path = @('Counts', 'UnexplainedCount'); Up = 'new dump-less restart volume appeared since the baseline'; Down = 'dump-less restart volume resolved or aged out since the baseline' }
+        @{ Label = 'System crash count';         Path = @('Counts', 'CrashCount');       Read = 'Crash / bugcheck history';     Up = 'new crash volume appeared since the baseline'; Down = 'crash volume resolved or aged out since the baseline' }
+        @{ Label = 'Distinct stop-code count';   Path = @('Counts', 'DistinctCodes');    Read = 'Crash / bugcheck history';     Up = 'new stop-code variety appeared since the baseline'; Down = 'stop-code variety narrowed or aged out since the baseline' }
+        @{ Label = 'WHEA total event count';     Path = @('Trend', 'Whea', 'Total');     Read = 'Hardware-error log (WHEA)';    Up = 'new hardware-error log activity appeared since the baseline'; Down = 'hardware-error log activity dropped since the baseline' }
+        @{ Label = 'WHEA fatal event count';     Path = @('Trend', 'Whea', 'Fatal');     Read = 'Hardware-error log (WHEA)';    Up = 'new fatal WHEA activity appeared since the baseline'; Down = 'fatal WHEA activity dropped since the baseline' }
+        @{ Label = 'WHEA corrected event count'; Path = @('Trend', 'Whea', 'Corrected'); Read = 'Hardware-error log (WHEA)';    Up = 'new corrected WHEA activity appeared since the baseline'; Down = 'corrected WHEA activity dropped since the baseline' }
+        @{ Label = 'TDR count';                  Path = @('Trend', 'Tdr', 'Count');      Read = 'GPU timeouts / vendor errors'; Up = 'new display-driver timeout activity appeared since the baseline'; Down = 'display-driver timeout activity dropped since the baseline' }
+        @{ Label = 'Application crash count';    Path = @('Counts', 'AppCrashCount');    Read = 'Application crashes';          Up = 'new app-crash volume appeared since the baseline'; Down = 'app-crash volume resolved or aged out since the baseline' }
+        @{ Label = 'Unexplained restart count';  Path = @('Counts', 'UnexplainedCount'); Read = 'Crash / bugcheck history';     Up = 'new dump-less restart volume appeared since the baseline'; Down = 'dump-less restart volume resolved or aged out since the baseline' }
     )
     foreach ($n in $numericChecks) {
+        # Abstain if EITHER run could not read this signal - a 0 from an unreadable run is missing data, not a real value.
+        $curSigReadable = (-not $curRead.ContainsKey($n.Read)) -or $curRead[$n.Read]
+        $baseSigReadable = (-not $baseRead.ContainsKey($n.Read)) -or $baseRead[$n.Read]
+        if (-not $curSigReadable -or -not $baseSigReadable) {
+            $unavailable += "$($n.Label) (signal not readable in one run)"
+            continue
+        }
         $d = New-SoNumericDelta $n.Label (Get-SoPathValue $baselineObj $n.Path $null) (Get-SoPathValue $current $n.Path $null) $n.Up $n.Down
         if (-not $d.Available) {
             $unavailable += $n.Label
@@ -2602,21 +2637,13 @@ function Compare-SoEvidence($baselineObj, $diag) {
             $curDrive = [string](Get-SoPathValue $current @('Trend', 'SystemDriveFree', 'Drive') $baseDrive)
             $bPct = Get-SoPathValue $baselineObj @('Trend', 'SystemDriveFree', 'FreePct') $null
             $cPct = Get-SoPathValue $current @('Trend', 'SystemDriveFree', 'FreePct') $null
-            $lines += "System-drive free space changed on $baseDrive/$curDrive from $bFree GB ($bPct%) to $cFree GB ($cPct%)."
+            $bPctText = if ($null -ne $bPct) { " ($bPct%)" } else { '' }
+            $cPctText = if ($null -ne $cPct) { " ($cPct%)" } else { '' }
+            $lines += "System-drive free space changed on $baseDrive/$curDrive from $bFree GB$bPctText to $cFree GB$cPctText."
             $changed = $true
         }
     } else { $unavailable += 'system-drive free space' }
 
-    $baseRead = @{}
-    foreach ($r in @((Get-SoPathValue $baselineObj @('Readability') @()))) {
-        $sig = [string](Get-SoPathValue $r @('Signal') '')
-        if ($sig) { $baseRead[$sig] = ConvertTo-SoBool (Get-SoPathValue $r @('Readable') $false) }
-    }
-    $curRead = @{}
-    foreach ($r in @((Get-SoPathValue $current @('Readability') @()))) {
-        $sig = [string](Get-SoPathValue $r @('Signal') '')
-        if ($sig) { $curRead[$sig] = ConvertTo-SoBool (Get-SoPathValue $r @('Readable') $false) }
-    }
     if ($baseRead.Count -eq 0 -or $curRead.Count -eq 0) {
         $unavailable += 'readability transitions'
     } else {
@@ -3019,7 +3046,11 @@ $crashSig = Get-CrashEvents $since
 $deepDumpSig = $null
 if ($DeepDump) {
     Write-Host 'Checking crash dump metadata (read-only, optional)...' -ForegroundColor Cyan
-    $deepDumpSig = Get-DeepDumpResult $crashSig.Items
+    # Wrap the collector: a malformed / foreign dump must surface as honest "not usable, not clean" - never
+    # abort the run, and never silently leave $deepDumpSig null (which would let the clean banner stand).
+    # Requested=$true drives New-Diagnosis's else-branch to emit the honest note and suppress the clean banner.
+    $deepErrSentinel = [pscustomobject]@{ Requested = $true; Status = 'collection-error'; Path = ''; Source = ''; Notes = @(); BugcheckCode = $null; BugcheckParameters = @(); ModuleName = ''; FaultingAddress = $null; IsThirdParty = $false; Tool = ''; Detail = '' }
+    $deepDumpSig = Invoke-Safe { Get-DeepDumpResult $crashSig.Items } $deepErrSentinel
 }
 $driveSig = Get-DriveHealth
 $volSig   = Get-VolumeInfo

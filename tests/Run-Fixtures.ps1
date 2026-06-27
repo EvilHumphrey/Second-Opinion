@@ -245,6 +245,7 @@ $baseDeepDiag = New-Diagnosis $baseDeepData
 $deepGpuDiag  = New-Diagnosis $deepGpuData
 $deepNtDiag   = New-Diagnosis (_data @{ DeepDump = (New-FakeDeepDump 'attributed' 'ntoskrnl.exe' $false '0xD1' (ConvertTo-DumpUInt64 'fffff806`10001000')) })
 $deepNoDumpDiag = New-Diagnosis (_data @{ DeepDump = (New-FakeDeepDump 'not-found' '' $false $null $null) })
+$deepErrDiag = New-Diagnosis (_data @{ DeepDump = (New-FakeDeepDump 'collection-error' '' $false $null $null) })
 
 $deepChecks = @(
     @{ N = 'deep-dump parse: debugger text maps a bugcheck parameter to a third-party module'; C = { ($parsedGpuDump.BugcheckCode -eq '0x116') -and ($parsedGpuDump.ModuleName -eq 'nvlddmkm.sys') -and ($parsedGpuDump.IsThirdParty -eq $true) } }
@@ -260,6 +261,10 @@ $deepChecks = @(
             [bool](@($deepNtDiag.Notes) | Where-Object { $_ -match 'did not isolate a third-party module' }) -and (@($deepNtDiag.Observed).Count -eq 0) } }
     @{ N = 'deep-dump abstention: no dump found is a note and suppresses clean'; C = {
             ($deepNoDumpDiag.CleanBanner -eq $false) -and [bool](@($deepNoDumpDiag.Notes) | Where-Object { $_ -match 'no crash dump file was found' }) } }
+    @{ N = 'deep-dump robustness: a collection error abstains (honest note + suppresses clean), never silently clean'; C = {
+            ($deepErrDiag.CleanBanner -eq $false) -and [bool](@($deepErrDiag.Notes) | Where-Object { $_ -match 'not usable' -and $_ -match 'not clean' }) } }
+    @{ N = 'deep-dump parse: an over-long hex bugcheck token abstains to null (no Int64 overflow/throw)'; C = {
+            $p = ConvertFrom-DebuggerDumpText "BugCheck FFFFFFFFFFFFFFFFFFFF, {0,0,0,0}"; $null -eq $p.BugcheckCode } }
 )
 foreach ($dc in $deepChecks) {
     $ok = $false
@@ -324,6 +329,8 @@ $shortUserMap = New-RedactionMap ([pscustomobject]@{ UserName = 'sam'; ComputerN
 $shortUserDone = Protect-Text 'samples in the sample folder; sam owns C:\Users\sam.' $shortUserMap
 $tinyUserMap = New-RedactionMap ([pscustomobject]@{ UserName = 'al'; ComputerName = 'PC'; BiosSerial = '' })
 $tinyUserDone = Protect-Text 'algorithm notes by al in alpha builds' $tinyUserMap
+$oneCharMap = New-RedactionMap ([pscustomobject]@{ UserName = 'a'; ComputerName = 'PC'; BiosSerial = '' })
+$oneCharDone = Protect-Text 'a crash on a machine with a dump' $oneCharMap
 $redChecks = @(
     @{ N = 'redaction: Protect-Text masks hostname / username / BIOS serial and leaves placeholders'; C = { ($redDone -notmatch 'DESKTOP-RED01') -and ($redDone -notmatch 'redacted_user') -and ($redDone -notmatch 'SN-REDACT-77') -and ($redDone -match '\[HOST_1\]') -and ($redDone -match '\[USER_1\]') -and ($redDone -match '\[SERIAL_1\]') } }
     @{ N = 'redaction: a junk/default BIOS serial is NOT mapped (no false [SERIAL_1])'; C = { $j = New-RedactionMap ([pscustomobject]@{ UserName = 'u'; ComputerName = 'h'; BiosSerial = 'To Be Filled By O.E.M.' }); -not (@($j.Values) -contains '[SERIAL_1]') } }
@@ -331,7 +338,8 @@ $redChecks = @(
     @{ N = 'redaction: Build-AiPrompt with redact=$true masks IPv6 without eating MAC-like hex'; C = { ($redOn -notmatch 'fe80::abcd') -and ($redOn -notmatch '2001:db8::42') -and ($redOn -match '\[IPV6\]') -and ($redOn -match '\[MAC\]') } }
     @{ N = 'redaction: Build-AiPrompt with redact=$false leaves identifiers intact (wiring proof)'; C = { ($redOff -match '00:1A:2B:3C:4D:5E') -and ($redOff -match '192\.168\.1\.42') } }
     @{ N = 'redaction: a 3-char username masks only whole words, never ordinary prose substrings'; C = { ($shortUserDone -match 'samples in the sample folder') -and ($shortUserDone -notmatch '\[USER_1\]ples') -and ($shortUserDone -match 'C:\\Users\\\[USER_1\]') } }
-    @{ N = 'redaction: a 2-char username is too short to map and does not shred prose'; C = { $tinyUserDone -eq 'algorithm notes by al in alpha builds' } }
+    @{ N = 'redaction: a 2-char username masks the whole token but NOT prose substrings (share-safe packet)'; C = { $tinyUserDone -eq 'algorithm notes by [USER_1] in alpha builds' } }
+    @{ N = 'redaction: a 1-char username is too short to map and does not shred ordinary prose'; C = { $oneCharDone -eq 'a crash on a machine with a dump' } }
 )
 foreach ($rc in $redChecks) {
     $ok = $false
@@ -415,6 +423,12 @@ $oldStamp = [pscustomobject]@{ ToolVersion = '0.1.0'; KbHash = 'OLD-KB'; GitSha 
 $versionDiff = Compare-SoEvidence (New-SoEvidenceObject $baselineSys $baselineDiag $oldStamp) $currentDiffDiag
 $versionDiffText = ((Get-SoBaselineDiffLines $versionDiff) -join "`n")
 
+# #2 fix: an unreadable current signal must ABSTAIN, not emit a false "activity dropped" (count 0 = missing).
+$wheaReadableBaseEv = New-SoEvidenceObject $probeSys (New-Diagnosis (_data @{ Whea = (_whea 0 8 8) })) $packetStamp
+$wheaUnreadableCur = New-Diagnosis (_data @{ Whea = (_whea 0 0 0 $false) })
+$wheaUnreadableCur | Add-Member -NotePropertyName EvidenceSnapshot -NotePropertyValue (New-SoEvidenceObject $probeSys $wheaUnreadableCur $packetStamp) -Force
+$wheaAbstainText = ((Get-SoBaselineDiffLines (Compare-SoEvidence $wheaReadableBaseEv $wheaUnreadableCur)) -join "`n")
+
 $manualRedactedDiff = [pscustomobject]@{
     Usable = $true
     Status = 'compared'
@@ -437,6 +451,7 @@ $diffChecks = @(
     @{ N = 'baseline-diff: helper packet emits baseline-diff.md only when a diff exists'; C = { [bool]$diffPacket['baseline-diff.md'] } }
     @{ N = 'baseline-diff: AI prompt redacts identifiers inside baseline diff notes'; C = { ($diffPrompt -notmatch 'DESKTOP-RED01|redacted_user|SN-REDACT-77|00:1A:2B:3C:4D:5E|192\.168\.1\.42|fe80::abcd') -and ($diffPrompt -match '\[HOST_1\]') -and ($diffPrompt -match '\[MAC\]') -and ($diffPrompt -match '\[IP\]') -and ($diffPrompt -match '\[IPV6\]') } }
     @{ N = 'baseline-diff: packet baseline-diff.md redacts identifiers'; C = { ($diffPacket['baseline-diff.md'] -notmatch 'DESKTOP-RED01|redacted_user|SN-REDACT-77|00:1A:2B:3C:4D:5E|192\.168\.1\.42|fe80::abcd') -and ($diffPacket['baseline-diff.md'] -match '\[HOST_1\]') -and ($diffPacket['baseline-diff.md'] -match '\[MAC\]') -and ($diffPacket['baseline-diff.md'] -match '\[IP\]') -and ($diffPacket['baseline-diff.md'] -match '\[IPV6\]') } }
+    @{ N = 'baseline-diff: an unreadable current signal ABSTAINS - no false "WHEA dropped from 8 to 0" (honest-abstention)'; C = { ($wheaAbstainText -notmatch 'WHEA total event count (decreased|increased)') -and ($wheaAbstainText -notmatch 'hardware-error log activity dropped') -and ($wheaAbstainText -match 'not readable in one run') } }
 )
 foreach ($dc in $diffChecks) {
     $ok = $false
