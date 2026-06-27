@@ -1,0 +1,6 @@
+counts crashes=0 distinct=0 unexplained=0 appcrash=0
+culprit | GPU display driver (NVIDIA GeForce RTX 3070) | gpu | 1 | High
+culprit | GPU hardware (NVIDIA GeForce RTX 3070) | gpuhw | 2 | Medium
+note | Drive health - the drive list could not be read this run (Get-PhysicalDisk failed); drives were NOT checked.
+note | Hardware-error log (WHEA) - could not be read this run; NOT checked.
+ruled | Windows Update - no recent update failures.

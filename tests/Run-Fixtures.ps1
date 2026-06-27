@@ -144,6 +144,31 @@ $asserts = @(
     @{ N = 'lone-0x116: a tier-2-only run yields a possible (not prime-suspect) headline'; F = 'lone-0x116'; C = { param($d) $d.Headline.Severity -eq 'possible' } }
     @{ N = 'blind-run: the readability matrix flags the unreadable core signals'; F = 'blind-run'; C = { param($d) @($d.Readability | Where-Object { -not $_.Readable }).Count -ge 3 } }
     @{ N = 'empty: the readability matrix shows every signal readable on a clean run'; F = 'empty'; C = { param($d) (@($d.Readability).Count -gt 0) -and (@($d.Readability | Where-Object { -not $_.Readable }).Count -eq 0) } }
+    # --- GPU-hardware node (gpuhw): a DISTINCT tier-2 "possible" naming the CARD itself. It fires only on
+    #     corroborated GPU instability (>=2 independent channels OR a recurring GPU bugcheck), routes to the
+    #     non-destructive swap-test, and is honest-abstention-capped at tier 2 / Medium - NEVER tier 1 / High
+    #     in v0 (a false "your card is dying" sends a friend to RMA a good card). A genuine GPU hardware FACT
+    #     (a fatal WHEA attributed to the GPU/PCIe) would lift it to High, but v0 has no such attribution.
+    @{ N = 'gpu-two-channel: two GPU channels raise the SEPARATE GPU-hardware node at tier 2 / Medium'; F = 'gpu-two-channel'; C = { param($d) $h = @($d.Culprits | Where-Object { $_.TierClass -eq 'gpuhw' }) | Select-Object -First 1; [bool]$h -and ($h.Tier -eq 2) -and ($h.Confidence -eq 'Medium') } }
+    @{ N = 'gpu-two-channel: the GPU-hardware node is NEVER tier 1 / High (cannot prove card-vs-driver from a stop code)'; F = 'gpu-two-channel'; C = { param($d) $h = @($d.Culprits | Where-Object { $_.TierClass -eq 'gpuhw' }) | Select-Object -First 1; [bool]$h -and ($h.Tier -ne 1) -and ($h.Confidence -ne 'High') } }
+    @{ N = 'gpu-two-channel: the hardware confirm leads with the driver rule-out, then the swap-test, and warns against RMA'; F = 'gpu-two-channel'; C = { param($d) $h = @($d.Culprits | Where-Object { $_.TierClass -eq 'gpuhw' }) | Select-Object -First 1; [bool]$h -and ($h.ConfirmBy -match 'rule out the driver') -and ($h.ConfirmBy -match 'swap-test') -and ($h.ConfirmBy -match 'Do NOT RMA') } }
+    @{ N = 'gpu-two-channel: the driver node still ranks ABOVE the hardware node (driver tier 1, hardware tier 2)'; F = 'gpu-two-channel'; C = { param($d) $g = @($d.Culprits | Where-Object { $_.TierClass -eq 'gpu' }) | Select-Object -First 1; $h = @($d.Culprits | Where-Object { $_.TierClass -eq 'gpuhw' }) | Select-Object -First 1; [bool]$g -and [bool]$h -and ($g.Tier -eq 1) -and ($h.Tier -eq 2) } }
+    @{ N = 'gpu-failure-01: the real failing-card case raises the GPU-hardware node at tier 2 / Medium alongside the driver node'; F = 'gpu-failure-01'; C = { param($d) $h = @($d.Culprits | Where-Object { $_.TierClass -eq 'gpuhw' }) | Select-Object -First 1; [bool]$h -and ($h.Tier -eq 2) -and ($h.Confidence -eq 'Medium') } }
+    @{ N = 'rapid-repeat-same-code: a recurring GPU bugcheck (>=2 crashes) raises the GPU-hardware node tier 2 / Medium'; F = 'rapid-repeat-same-code'; C = { param($d) $h = @($d.Culprits | Where-Object { $_.TierClass -eq 'gpuhw' }) | Select-Object -First 1; [bool]$h -and ($h.Tier -eq 2) -and ($h.Confidence -eq 'Medium') } }
+    @{ N = 'gpuhw-tdr-vendor: two NON-bugcheck channels (TDR + vendor) raise the hardware node tier 2/Medium AND the driver node tier 1/High'; F = 'gpuhw-tdr-vendor'; C = { param($d) $g = @($d.Culprits | Where-Object { $_.TierClass -eq 'gpu' }) | Select-Object -First 1; $h = @($d.Culprits | Where-Object { $_.TierClass -eq 'gpuhw' }) | Select-Object -First 1; [bool]$g -and [bool]$h -and ($g.Tier -eq 1) -and ($g.Confidence -eq 'High') -and ($h.Tier -eq 2) -and ($h.Confidence -eq 'Medium') } }
+    @{ N = 'gpuhw-tdr-vendor: with WHEA readable + clean, the hardware node carries the honest "no logged hardware fault yet" against-line'; F = 'gpuhw-tdr-vendor'; C = { param($d) $h = @($d.Culprits | Where-Object { $_.TierClass -eq 'gpuhw' }) | Select-Object -First 1; [bool]$h -and [bool](@($h.Against) | Where-Object { $_ -match 'hardware-error log .* is clean' }) } }
+    @{ N = 'gpuhw-tdr-only: a single-channel TDR flood is a DRIVER pattern - it must NOT raise the GPU-hardware node'; F = 'gpuhw-tdr-only'; C = { param($d) -not [bool](@($d.Culprits) | Where-Object { $_.TierClass -eq 'gpuhw' }) } }
+    @{ N = 'gpuhw-tdr-only: the single-channel TDR flood still reaches the driver node at tier 1 / High'; F = 'gpuhw-tdr-only'; C = { param($d) $g = @($d.Culprits | Where-Object { $_.TierClass -eq 'gpu' }) | Select-Object -First 1; [bool]$g -and ($g.Tier -eq 1) -and ($g.Confidence -eq 'High') } }
+    @{ N = 'lone-0x116: a lone GPU bugcheck must NOT raise the GPU-hardware node'; F = 'lone-0x116'; C = { param($d) -not [bool](@($d.Culprits) | Where-Object { $_.TierClass -eq 'gpuhw' }) } }
+    @{ N = 'lone-display-device: a lone flagged Display adapter must NOT raise the GPU-hardware node'; F = 'lone-display-device'; C = { param($d) -not [bool](@($d.Culprits) | Where-Object { $_.TierClass -eq 'gpuhw' }) } }
+    @{ N = 'same-crash-wer-kp41: a double-logged single GPU crash (1 bugcheck after dedup) must NOT raise the hardware node'; F = 'same-crash-wer-kp41'; C = { param($d) -not [bool](@($d.Culprits) | Where-Object { $_.TierClass -eq 'gpuhw' }) } }
+    @{ N = 'partial-readable-gpu: a single-channel TDR flood with unreadable drives/WHEA must NOT raise the hardware node'; F = 'partial-readable-gpu'; C = { param($d) -not [bool](@($d.Culprits) | Where-Object { $_.TierClass -eq 'gpuhw' }) } }
+    @{ N = 'culprit-signals-unreadable: an unreadable GPU signal must NOT raise the GPU-hardware node (honest abstention)'; F = 'culprit-signals-unreadable'; C = { param($d) -not [bool](@($d.Culprits) | Where-Object { $_.TierClass -eq 'gpuhw' }) } }
+    @{ N = 'gpuhw-unreadable-whea: the hardware node fires on two channels but does NOT claim WHEA "is clean" off a failed read'; F = 'gpuhw-unreadable-whea'; C = { param($d) $h = @($d.Culprits | Where-Object { $_.TierClass -eq 'gpuhw' }) | Select-Object -First 1; [bool]$h -and (-not [bool](@($h.Against) | Where-Object { $_ -match 'is clean' })) } }
+    @{ N = 'gpuhw-unreadable-whea: an unreadable WHEA never lifts the hardware node - it stays tier 2 / Medium'; F = 'gpuhw-unreadable-whea'; C = { param($d) $h = @($d.Culprits | Where-Object { $_.TierClass -eq 'gpuhw' }) | Select-Object -First 1; [bool]$h -and ($h.Tier -eq 2) -and ($h.Confidence -eq 'Medium') } }
+    @{ N = 'gpu-failure-01-intake: a done DDU adds the "points past the driver to the card" evidence to the hardware node'; F = 'gpu-failure-01-intake'; C = { param($d) $h = @($d.Culprits | Where-Object { $_.TierClass -eq 'gpuhw' }) | Select-Object -First 1; [bool]$h -and [bool](@($h.For) | Where-Object { $_ -match 'points past the driver to the card' }) } }
+    @{ N = 'gpu-failure-01-intake: the hardware confirm retargets to the swap-test (DDU already done) and still warns against RMA'; F = 'gpu-failure-01-intake'; C = { param($d) $h = @($d.Culprits | Where-Object { $_.TierClass -eq 'gpuhw' }) | Select-Object -First 1; [bool]$h -and ($h.ConfirmBy -match 'swap-test the GPU now') -and ($h.ConfirmBy -match 'Do NOT RMA') } }
+    @{ N = 'gpu-failure-01-intake: intake does NOT move the GPU-hardware ranking (still tier 2 / Medium)'; F = 'gpu-failure-01-intake'; C = { param($d) $h = @($d.Culprits | Where-Object { $_.TierClass -eq 'gpuhw' }) | Select-Object -First 1; [bool]$h -and ($h.Tier -eq 2) -and ($h.Confidence -eq 'Medium') } }
 )
 $apass = 0; $afail = 0
 Write-Host ''
@@ -154,6 +179,22 @@ foreach ($a in $asserts) {
     if ($d) { $ok = [bool](& $a.C $d) } else { Write-Host "NO FIXTURE $($a.F)" -ForegroundColor Yellow }
     if ($ok) { Write-Host "OK        $($a.N)" -ForegroundColor Green; $apass++ }
     else { Write-Host "VIOLATED  $($a.N)" -ForegroundColor Red; $afail++ }
+}
+
+# ---- GPU-hardware node global invariant: the gpuhw node is honest-abstention-capped. Across EVERY fixture it
+#      must be tier 2 / Medium, NEVER tier 1 / High - a false "your graphics card is dying" sends a friend to
+#      RMA a good card. The per-fixture asserts lock WHEN it fires; this sweep locks it can never over-claim.
+$gpuhwAll = @()
+foreach ($nm in $diags.Keys) { $gpuhwAll += @($diags[$nm].Culprits | Where-Object { $_.TierClass -eq 'gpuhw' }) }
+$gpuhwGlobalChecks = @(
+    @{ N = 'gpuhw global: every GPU-hardware node across all fixtures is tier 2 / Medium, never tier 1 / High'; C = { @($gpuhwAll | Where-Object { $_.Tier -ne 2 -or $_.Confidence -ne 'Medium' }).Count -eq 0 } }
+    @{ N = 'gpuhw global: the GPU-hardware node DOES fire on corroborated GPU instability (positive coverage exists)'; C = { @($gpuhwAll).Count -ge 1 } }
+)
+foreach ($gc in $gpuhwGlobalChecks) {
+    $ok = $false
+    try { $ok = [bool](& $gc.C) } catch { $ok = $false }
+    if ($ok) { Write-Host "OK        $($gc.N)" -ForegroundColor Green; $apass++ }
+    else { Write-Host "VIOLATED  $($gc.N)" -ForegroundColor Red; $afail++ }
 }
 
 # ---- Intake function checks: not fixture/New-Diagnosis based. These prove the questionnaire NEVER

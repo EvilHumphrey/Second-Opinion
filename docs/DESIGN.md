@@ -38,6 +38,18 @@ These are what keep us from sending a friend to RMA good hardware:
      the lone-0x116 and lone-display-device fixtures assert this. (Same-cluster signals corroborate but
      are not fully independent; the explicit channel count makes that auditable, and
      replaced the old additive `$gpuSig` as the confidence driver.)
+   - **GPU HARDWARE vs GPU driver (the `gpuhw` node).** The graphics card *itself* is a SEPARATE,
+     secondary suspect from its driver. It fires ALONGSIDE (never supersedes) the driver node on
+     corroborated GPU instability — `>= 2` independent channels OR a recurring GPU bugcheck (`>= 2`
+     crashes) — and is capped at **tier 2 / "possible" (Medium)**: v0 reads only the stop code and
+     CANNOT prove a failing card from a bad driver (every GPU signal is driver-or-hardware), so the
+     confident "your GPU is dying" is withheld and the confirm path is the non-destructive swap-test
+     ("rule out the driver with DDU first; do NOT RMA on this report alone"). A lone TDR, a single-channel
+     TDR flood, a lone bugcheck, a lone Display device, or an unreadable GPU signal does NOT raise it.
+     **INERT High path (deep-mode only):** a genuine GPU hardware FACT — a fatal WHEA attributed to the
+     GPU/PCIe — would lift this node to tier 1 / High, but v0's WHEA collector does not attribute WHEA to
+     a component (that payload parse is deep-mode), so the High path is inert in v0, exactly like the
+     `ntoskrnl -> inconclusive` rule above.
    - Tier reflects confidence: **tier 1 == High**; Medium/Low inference-based culprits are tier 2
      ("possible"), never "prime suspect" off a lone signal.
 4. Blank SMART data → say "not exposed for this drive", **never** render absent data as "healthy".

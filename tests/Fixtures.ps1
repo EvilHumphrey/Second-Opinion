@@ -312,6 +312,42 @@ function Get-Fixtures {
         Volumes        = @( (_vol 'C:' 200 465 $false) )
     }
 
+    # gpuhw-tdr-vendor: TWO independent GPU channels (a TDR pattern + vendor driver reset/hang events) with NO
+    # bugcheck. The driver node reaches High (>=2 channels); the SEPARATE GPU-hardware node fires at tier 2 /
+    # Medium (the card is a ranked possibility, never a verdict) and - because drives/WHEA are readable AND
+    # clean - carries the honest "no logged hardware fault yet" against-line. Locks the non-bugcheck
+    # multi-channel raise path AND that the hardware node never reaches tier 1 / High in v0.
+    $f['gpuhw-tdr-vendor'] = _data @{
+        TdrCount        = 3
+        GpuVendorEvents = (_gpuv 2 'NVIDIA')
+        GpuModel        = 'NVIDIA GeForce RTX 3060 Ti'
+        Drives          = @( (_drive 'Generic SSD' 'SSD' 500 'Healthy' $true) )
+        Volumes         = @( (_vol 'C:' 200 465 $false) )
+    }
+
+    # gpuhw-tdr-only: a single-channel TDR FLOOD (6 timeouts, nothing else). The driver node reaches High on
+    # TdrCount>=5, but this is a DRIVER-ONLY pattern - one channel is not enough to suspect the CARD - so the
+    # GPU-hardware node must NOT fire. Honest abstention: a pile of display-driver timeouts is most often a bad
+    # driver, not a dying card. (The conservative companion to partial-readable-gpu's same single-channel flood.)
+    $f['gpuhw-tdr-only'] = _data @{
+        TdrCount = 6
+        GpuModel = 'NVIDIA GeForce RTX 4070'
+        Drives   = @( (_drive 'Generic SSD' 'SSD' 500 'Healthy' $true) )
+        Volumes  = @( (_vol 'C:' 200 465 $false) )
+    }
+
+    # gpuhw-unreadable-whea: TWO GPU channels (a TDR pattern + a flagged Display adapter) DO fire the hardware
+    # node, but the drive and WHEA reads FAILED this run. The node must NOT claim the hardware-error log "is
+    # clean" off a failed read (evidence-quality / DESIGN guardrail #6: absence is never a clean bill) - the
+    # WHEA-clean against-line is gated on Whea.Readable and must be ABSENT here, and the node stays tier 2/Medium.
+    $f['gpuhw-unreadable-whea'] = _data @{
+        TdrCount       = 2
+        ProblemDevices = @( (_pdev 'NVIDIA GeForce RTX 3070' 'Display' 43 'Windows stopped it - device reported a problem (Code 43)') )
+        GpuModel       = 'NVIDIA GeForce RTX 3070'
+        DrivesReadable = $false
+        Whea           = (_whea 0 0 0 $false)
+    }
+
     # memdiag-zero-crash: a Windows Memory Diagnostic failure is a hardware FACT -> High even with zero
     # crashes (the documented single-event exception, like WHEA / drive-health). Previously unfixtured.
     $f['memdiag-zero-crash'] = _data @{

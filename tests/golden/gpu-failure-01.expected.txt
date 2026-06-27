@@ -1,6 +1,7 @@
 counts crashes=2 distinct=1 unexplained=37 appcrash=3
 culprit | GPU display driver (NVIDIA GeForce RTX 3060 Ti) | gpu | 1 | High
 culprit | 37 unexpected restarts with no recorded cause - a frequent hard-reset pattern, the dominant symptom on this PC | power | checklist | Insufficient prom=37
+culprit | GPU hardware (NVIDIA GeForce RTX 3060 Ti) | gpuhw | 2 | Medium
 culprit | This pattern may need hands-on hardware testing | handoff | checklist | Insufficient
 note | All 2 system crashes share one stop code (0x116) - a consistent pattern leans toward a single software/driver cause.
 note | Drive health - Windows reports basic status Healthy, but detailed SMART was not readable this run (2 of 2 drive(s)); run elevated to confirm. This is not a clean bill of drive health.

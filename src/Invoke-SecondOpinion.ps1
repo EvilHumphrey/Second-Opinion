@@ -1623,6 +1623,44 @@ function New-Diagnosis($data) {
             -For $gpuFor -Against $against `
             -ConfirmBy 'Clean-reinstall the GPU driver with DDU (Display Driver Uninstaller), or roll back a version. If clean drivers do NOT stop it, swap-test the GPU (a failing card behaves exactly like this) - do not RMA on a guess.' `
             -Search $gpuSearch
+
+        # C2. GPU HARDWARE (the card itself) - a DISTINCT, secondary hypothesis to the driver node above, NOT
+        # a restatement of it. In v0 every GPU signal we read (TDR / GPU bugcheck / vendor reset / flagged
+        # Display device) is driver-OR-hardware: a failing card and a bad driver look identical, so we CANNOT
+        # prove the card from a stop code. This node is therefore honest-abstention-capped at tier 2 /
+        # "possible" - it NAMES the card as a ranked suspect and routes to the non-destructive swap-test, but
+        # NEVER claims High. It fires only on CORROBORATED GPU instability: >= 2 INDEPENDENT channels, OR a
+        # RECURRING (>= 2) hard GPU bugcheck (DESIGN guardrail #3's >=2-crashes bar) - so a lone TDR, a lone
+        # bugcheck, a single flagged Display device, or a single-channel TDR flood (the driver node's weak
+        # cases) never raises "your card may be dying". The driver node stays tier 1 ABOVE it (rule out the
+        # driver first). A genuine GPU HARDWARE FACT - a fatal WHEA attributed to the GPU/PCIe - would escalate
+        # this to tier 1 / High, but v0 has no such attribution (deep-mode only); that path is documented in
+        # DESIGN.md and stays INERT here, exactly like the ntoskrnl->inconclusive rule. (Operator-confirmed.)
+        $gpuBugCrashes = 0
+        foreach ($cg in $codeGroups) { if (@('0x116', '0x117', '0x119') -contains [string]$cg.Name) { $gpuBugCrashes += [int]$cg.Count } }
+        if ($gpuChannels -ge 2 -or $gpuBugCrashes -ge 2) {
+            $hwFor = @()
+            if ($gpuChannels -ge 2) {
+                $hwFor += "The GPU instability above spans $gpuChannels independent evidence channels (out of TDR / GPU bugcheck / vendor driver event / flagged Display adapter) - a multi-channel pattern is consistent with the graphics card itself failing, not only its driver."
+            }
+            if ($gpuBugCrashes -ge 2) {
+                $hwFor += "$gpuBugCrashes separate crashes carry a hard GPU bugcheck ($($gpuCodes -join ', ')) - a recurring GPU bugcheck (>= 2 crashes, the bar before any hardware claim) keeps the card itself in suspicion alongside its driver."
+            }
+            $hwFor += 'This is a possibility to rule out, not a verdict: v0 reads the stop code from events only and cannot tell a failing card from a bad driver by these symptoms alone. Only a swap-test can.'
+            $hwAgainst = @('A bad, mismatched, or corrupted display driver produces these EXACT symptoms and is the more common cause - rule the driver out first (a clean DDU reinstall) before suspecting the card.')
+            # Honest "no hardware FACT yet" line, gated on the WHEA read SUCCEEDING (an empty WHEA count also
+            # occurs when the read FAILED, which would falsely reassure). When a fatal WHEA IS present, node B
+            # above already owns the hardware-High, and this stays silent (Total -eq 0).
+            if ($data.Whea.Readable -and [int]$data.Whea.Total -eq 0) {
+                $hwAgainst += 'The hardware-error log (WHEA) is clean this window - no logged hardware fault yet corroborates a dying card, so this stays a possibility, not a confirmed hardware verdict. (A clean log is not proof the card is fine.)'
+            }
+            $hwTitle  = if ($gpuModel) { "GPU hardware ($gpuModel)" } else { 'GPU hardware (the graphics card itself)' }
+            $hwSearch = if ($gpuModel) { "Windows 11 $gpuModel failing GPU swap test artifacts crash" } else { 'Windows 11 failing GPU swap test artifacts VRAM crash' }
+            $culprits += New-Culprit -Title $hwTitle -TierClass 'gpuhw' -Tier 2 -Confidence 'Medium' `
+                -For $hwFor -Against $hwAgainst `
+                -ConfirmBy 'First rule out the driver - clean-reinstall it with DDU (Display Driver Uninstaller), or roll back a version. If crashes continue on known-good drivers, swap-test the GPU: move this card into another PC, or drop a known-good card into this one. A swap that changes the symptom is the proof. Do NOT RMA or replace the card on this report alone - the swap-test is what isolates the card from the rest of the system.' `
+                -Search $hwSearch
+        }
     }
 
     # D. Memory / RAM.
@@ -1919,6 +1957,14 @@ function New-Diagnosis($data) {
                 if ($c.TierClass -eq 'gpu') {
                     $c.ConfirmBy = 'The clean driver reinstall (DDU) is already done and it still crashes, so stop reinstalling drivers - swap-test the GPU instead (a known-good card in this PC, or this card in another PC). A swap that fixes it is proof; do not RMA on a guess.'
                 }
+                # The GPU-hardware node: a done DDU is the software path the user has ALREADY eliminated, which
+                # points PAST the driver to the card (a For-line for this node, not an against-line), and makes
+                # the swap-test the decisive next step. Intake adds evidence + retargets the confirm only - it
+                # does NOT move this node's tier/confidence (it stays tier 2 / Medium).
+                if ($c.TierClass -eq 'gpuhw') {
+                    $c.For = @($c.For) + 'You report a clean Windows reinstall and/or a DDU driver wipe is already done and it still crashes - that is the software/driver path eliminated, which points past the driver to the card itself. The swap-test below is now the decisive next step.'
+                    $c.ConfirmBy = 'The driver path (clean reinstall / DDU) is already done and it still crashes, so stop reinstalling drivers - swap-test the GPU now: move this card into another PC, or a known-good card into this one. A swap that changes the symptom is the proof. Do NOT RMA or replace the card on this report alone.'
+                }
             }
             $notes += 'User reports a clean Windows reinstall / DDU driver wipe was already done and crashes persist - the software and display-driver branches are treated as effectively ruled out below.'
         }
@@ -1928,7 +1974,7 @@ function New-Diagnosis($data) {
         switch ([int]$intake.CrashBehavior) {
             1 {
                 foreach ($c in $culprits) {
-                    if ($c.TierClass -in 'power', 'gpu', 'cpu', 'handoff') {
+                    if ($c.TierClass -in 'power', 'gpu', 'gpuhw', 'cpu', 'handoff') {
                         $c.For = @($c.For) + 'You report the WHOLE PC reboots (not just the app closing) - consistent with a power-delivery, GPU-hardware, or platform-level fault rather than an application bug.'
                     }
                 }
@@ -1948,7 +1994,7 @@ function New-Diagnosis($data) {
         switch ([int]$intake.When) {
             1 {
                 foreach ($c in $culprits) {
-                    if ($c.TierClass -in 'gpu', 'power', 'cpu') {
+                    if ($c.TierClass -in 'gpu', 'gpuhw', 'power', 'cpu') {
                         $c.For = @($c.For) + 'You report crashes under gaming / high-GPU load - consistent with GPU, power-delivery, or thermal stress that only appears under load.'
                     }
                 }
@@ -2378,6 +2424,7 @@ function Get-PacketDoNotDoYet($c) {
     switch ([string]$c.TierClass) {
         'drive'   { return 'DO NOT DO YET: Do not replace or RMA the drive until the SMART confirmation above is done. Backups are the exception: back up important data now.' }
         'gpu'     { return 'DO NOT DO YET: Do not RMA or buy a GPU until the driver rollback/DDU or swap-test confirm step produces evidence.' }
+        'gpuhw'   { return 'DO NOT DO YET: Do not RMA or buy a graphics card on this report alone. Rule out the driver (DDU) first; only a swap-test that changes the symptom justifies replacing the card.' }
         'cpu'     { return 'DO NOT DO YET: Do not RMA CPU/RAM/motherboard parts until stock-settings retest, temperature, and power checks support it.' }
         'memory'  { return 'DO NOT DO YET: Do not buy or RMA RAM until MemTest/Windows Memory Diagnostic or a stock-speed retest confirms the memory lead.' }
         'storage' { return 'DO NOT DO YET: Do not reinstall Windows or replace storage hardware until the SMART, cable, chkdsk, or free-space confirm step points there.' }
