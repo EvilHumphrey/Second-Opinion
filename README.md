@@ -52,6 +52,12 @@ Options:
 - `-OutDir <path>` — where to write the report (default `.\out`).
 - `-OpenReport` — open the HTML report when done.
 - `-NoRedact` — leave the AI prompt un-redacted (off by default; redaction is on).
+- `-DeepDump` — *(optional, advanced)* if a crash dump exists, parse it read-only with locally-installed
+  debugging tools (no downloads) to name the faulting module as **weak corroborating evidence** — it never
+  changes the ranking.
+- `-HelperPacket` — *(optional)* also write a shareable, always-redacted **case packet** to `out\packet\` (a
+  forum/Discord-safe summary, a schema-versioned evidence JSON, a redaction audit, and an unreadable-signals
+  list), each stamped with the tool version + KB hash.
 
 **Or run it as a single file:** `src/Invoke-SecondOpinion.ps1` is self-contained (it embeds the bugcheck
 knowledge base), so you can download just that one file and run it from any terminal — no folder, nothing to
@@ -132,13 +138,14 @@ identifier that survives into `ai-prompt.txt`? That's a bug worth reporting — 
 - Best-effort redaction is **not** a guarantee — a user-named device or app can slip through.
 - No redacted HTML report yet — `ai-prompt.txt` is the share-safe artifact.
 - No AI inside the tool — *you* paste the prompt into your own AI (keeps it free, private, offline-capable).
-- No minidump stack analysis in v0 — it reasons over event/signal *patterns*, not WinDbg `!analyze` output.
+- No full minidump stack analysis — it reasons over event/signal *patterns*. The optional `-DeepDump` flag adds
+  read-only faulting-module attribution as weak evidence, but not WinDbg `!analyze` root-causing.
 - Some SMART / device detail needs an elevated run.
 - With no crash dumps, it may produce a "capture the next crash" checklist rather than a verdict.
 
 ## Trust the ranking (run the tests)
 
-The scorer is deterministic and guarded by a fixture harness — 33 snapshot fixtures plus 97 guardrail
+The scorer is deterministic and guarded by a fixture harness — 33 snapshot fixtures plus 119 guardrail
 assertions that must always hold (e.g. *a single GPU bugcheck is never tier-1*, *blank SMART is never
 "healthy"*, *dump-less restarts never reach High*, *real-but-sub-threshold signals never read as "clean"*,
 *a hostile device name can't inject HTML or AI-prompt instructions*). Run them yourself:
