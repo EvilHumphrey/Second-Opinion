@@ -586,6 +586,64 @@ foreach ($rc in $redChecks) {
     else { Write-Host "VIOLATED  $($rc.N)" -ForegroundColor Red; $afail++ }
 }
 
+# ---- Redaction adversarial corpus (B9): the redactor is the load-bearing surface for the share-safe
+#      promise - a single PII leak into a friend's pasted prompt or shared packet is the worst-case failure.
+#      The v0.4.0 trust audit found 3 of its 5 findings HERE (P1 serial-whitespace, P2-1 device name, P3-2
+#      IPv4 over-redaction). The guardrails above lock in those specific instances; this corpus systematically
+#      pressure-tests the CLASSES behind them so the next regression in the class is caught, not just the one
+#      instance the audit happened to hit: regex-metachar escaping (no regex-injection via a crafted name),
+#      case-insensitive masking, the empty-identifier FAIL-SAFE (no map key that blanks all text), global
+#      multi-occurrence masking, the IPv4 valid-quad-vs-version/build battery, MAC + IPv6 forms, and null
+#      input. Every behavior below was OBSERVED identical under Windows PowerShell 5.1 AND PowerShell 7 before
+#      being codified. Pure unit-level over synthetic inputs - golden-neutral (no fixture, no scorer change).
+$cMetaHost    = New-RedactionMap ([pscustomobject]@{ UserName = 'u'; ComputerName = 'PC.*[v2]'; BiosSerial = '' })
+$cMetaHostOut = Protect-Text 'from PC.*[v2] and PCXY today' $cMetaHost
+$cDotUser     = New-RedactionMap ([pscustomobject]@{ UserName = 'a.b'; ComputerName = 'PC'; BiosSerial = '' })
+$cDotUserOut  = Protect-Text 'files a.b and aXb here' $cDotUser
+$cMetaSer1    = Protect-Text 'serial SN(2024)+X here' (New-RedactionMap ([pscustomobject]@{ UserName = 'u'; ComputerName = 'h'; BiosSerial = 'SN(2024)+X' }))
+$cMetaSer2    = Protect-Text 'serial SN\WIN\01 here'  (New-RedactionMap ([pscustomobject]@{ UserName = 'u'; ComputerName = 'h'; BiosSerial = 'SN\WIN\01' }))
+$cCaseOut     = Protect-Text 'path c:\logs\desktop-red01\dump owned by REDACTED_USER' $redMap
+$cBlankSerMap = New-RedactionMap ([pscustomobject]@{ UserName = 'zz'; ComputerName = 'qq'; BiosSerial = '   ' })
+$cBlankSerOut = Protect-Text 'important text stays intact' $cBlankSerMap
+$cEmptyMap    = New-RedactionMap ([pscustomobject]@{ UserName = ''; ComputerName = ''; BiosSerial = '' })
+$cEmptyOut    = Protect-Text 'this text must survive unchanged' $cEmptyMap
+$cGlobalOut   = Protect-Text '8.8.8.8 and 8.8.8.8; DESKTOP-RED01 / DESKTOP-RED01; redacted_user, redacted_user' $redMap
+$cIpValid     = @('255.255.255.255', '8.8.8.8', '10.0.0.1', '192.168.1.42')
+$cIpValidOut  = @($cIpValid | ForEach-Object { Protect-Text $_ $redMap })
+$cIpNonAddr   = @('10.0.26200.1', '4.8.04084.0', '999.888.777.666', '256.1.1.1', '1.2.300.4')
+$cIpNonAddrOut = @($cIpNonAddr | ForEach-Object { Protect-Text $_ $redMap })
+$cMacColon    = Protect-Text 'AA:BB:CC:DD:EE:FF' $redMap
+$cMacHyphen   = Protect-Text '00-1A-2B-3C-4D-5E' $redMap
+$cMacMixed    = Protect-Text '00:1A-2B:3C-4D:5E' $redMap
+$cMacNoSep    = Protect-Text 'deadbeefcafe55' $redMap
+$cV6Compressed = Protect-Text 'addr ::1 loop' $redMap
+$cV6Zone      = Protect-Text 'link fe80::1%eth0 here' $redMap
+$cV6Full      = Protect-Text '2001:db8:0:0:0:0:0:1' $redMap
+$cSink        = Protect-Text 'host DESKTOP-RED01 user redacted_user serial SN-REDACT-77 mac 00:1A:2B:3C:4D:5E ip 192.168.1.42 v6 2001:db8::42 end' $redMap
+$cNullOut     = $null; try { $cNullOut = Protect-Text $null $redMap } catch { $cNullOut = 'THREW' }
+$cEmptyInOut  = $null; try { $cEmptyInOut = Protect-Text '' $redMap } catch { $cEmptyInOut = 'THREW' }
+$corpusChecks = @(
+    @{ N = 'corpus: a hostname with regex metacharacters masks the literal but does NOT over-match (escape proof)'; C = { ($cMetaHostOut -match '\[HOST_1\]') -and ($cMetaHostOut -match 'PCXY today') -and ($cMetaHostOut -notmatch 'PC\.\*') } }
+    @{ N = 'corpus: a username containing a dot masks only the literal token, never as a wildcard (regex-injection proof)'; C = { $cDotUserOut -eq 'files [USER_1] and aXb here' } }
+    @{ N = 'corpus: a BIOS serial with regex metacharacters or a backslash masks as a literal'; C = { ($cMetaSer1 -match '\[SERIAL_1\]') -and ($cMetaSer1 -notmatch '2024') -and ($cMetaSer2 -match '\[SERIAL_1\]') -and ($cMetaSer2 -notmatch 'WIN') } }
+    @{ N = 'corpus: identifiers mask case-insensitively (lowercased host in a path, uppercased username)'; C = { ($cCaseOut -match '\[HOST_1\]') -and ($cCaseOut -match '\[USER_1\]') -and ($cCaseOut -notmatch 'desktop-red01') -and ($cCaseOut -notmatch 'REDACTED_USER') } }
+    @{ N = 'corpus (fail-safe): a whitespace-only serial creates NO map entry and never blanks text'; C = { (-not (@($cBlankSerMap.Values) -contains '[SERIAL_1]')) -and ($cBlankSerOut -eq 'important text stays intact') } }
+    @{ N = 'corpus (fail-safe): all-empty identifiers produce zero map keys and leave text intact'; C = { (@($cEmptyMap.Keys).Count -eq 0) -and ($cEmptyOut -eq 'this text must survive unchanged') } }
+    @{ N = 'corpus: every occurrence of a repeated identifier/address is masked (global, no leftover)'; C = { ($cGlobalOut -notmatch '8\.8\.8\.8') -and ($cGlobalOut -notmatch 'DESKTOP-RED01') -and ($cGlobalOut -notmatch 'redacted_user') -and ((@([regex]::Matches($cGlobalOut, '\[IP\]')).Count) -eq 2) -and ((@([regex]::Matches($cGlobalOut, '\[HOST_1\]')).Count) -eq 2) } }
+    @{ N = 'corpus: a battery of valid IPv4 addresses all mask to [IP]'; C = { -not (@($cIpValidOut) | Where-Object { $_ -ne '[IP]' }) } }
+    @{ N = 'corpus: non-address dotted values (build numbers, versions, out-of-range octets) are NEVER masked'; C = { (@($cIpNonAddrOut) -join '|') -eq (@($cIpNonAddr) -join '|') } }
+    @{ N = 'corpus: MAC masks with colon / hyphen / mixed separators; a separatorless hex run does not false-trigger'; C = { ($cMacColon -eq '[MAC]') -and ($cMacHyphen -eq '[MAC]') -and ($cMacMixed -eq '[MAC]') -and ($cMacNoSep -eq 'deadbeefcafe55') } }
+    @{ N = 'corpus: IPv6 masks compressed (::1), zone-id (fe80::1%zone), and full eight-group forms'; C = { ($cV6Compressed -match '\[IPV6\]') -and ($cV6Compressed -notmatch '::1') -and ($cV6Zone -match '\[IPV6\]') -and ($cV6Zone -notmatch 'fe80') -and ($cV6Full -eq '[IPV6]') } }
+    @{ N = 'corpus (capstone): host+user+serial+MAC+IPv4+IPv6 in one string all mask, no original survives'; C = { ($cSink -match '\[HOST_1\]') -and ($cSink -match '\[USER_1\]') -and ($cSink -match '\[SERIAL_1\]') -and ($cSink -match '\[MAC\]') -and ($cSink -match '\[IP\]') -and ($cSink -match '\[IPV6\]') -and ($cSink -notmatch 'DESKTOP-RED01|redacted_user|SN-REDACT-77|00:1A:2B:3C:4D:5E|192\.168\.1\.42|2001:db8::42') } }
+    @{ N = 'corpus (fail-safe): Protect-Text on $null or empty input returns falsy without throwing'; C = { (-not $cNullOut) -and ($cNullOut -ne 'THREW') -and ($cEmptyInOut -eq '') } }
+)
+foreach ($rc in $corpusChecks) {
+    $ok = $false
+    try { $ok = [bool](& $rc.C) } catch { $ok = $false }
+    if ($ok) { Write-Host "OK        $($rc.N)" -ForegroundColor Green; $apass++ }
+    else { Write-Host "VIOLATED  $($rc.N)" -ForegroundColor Red; $afail++ }
+}
+
 # ---- Helper packet guardrails (Slice 3): packet artifacts are render-only over an existing diagnosis,
 #      always redacted, schema/version stamped, and honest about unreadable signals.
 $packetStamp = [pscustomobject]@{ ToolVersion = $ScriptVersion; KbHash = 'TEST-KB-HASH'; GitSha = 'abc1234' }
