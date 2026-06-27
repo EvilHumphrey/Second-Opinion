@@ -45,12 +45,18 @@ td.k{color:var(--muted);width:42%}
 .foot{margin-top:26px;padding-top:14px;border-top:1px solid var(--line);font-size:13px;color:var(--muted)}
 .mono{font-family:Consolas,'Courier New',monospace}
 .clean{background:var(--greenbg);color:var(--green);border-radius:12px;padding:18px;font-size:15px;text-align:center}
+.headline{border-radius:12px;padding:16px 18px;font-size:15px;font-weight:600;margin-bottom:12px}
+.hl-warn{background:var(--amberbg);color:var(--amber)}
+.hl-info{background:var(--bluebg);color:var(--blue)}
+.rd-ok{color:var(--muted)}
+.rd-no{color:var(--amber);font-weight:600}
 </style>
 </head><body><div class="wrap">
 <h1>Second Opinion</h1>
-<p class="sub">DESKTOP-EXAMPLE &middot; last 30 days &middot; generated 2026-06-24 23:56 &middot; run standard (some detailed SMART/device data needs elevation)</p>
+<p class="sub">DESKTOP-EXAMPLE &middot; last 30 days &middot; generated 2026-06-27 16:10 &middot; run standard (some detailed SMART/device data needs elevation)</p>
 <div class="badges"><span class="badge b-green">read-only &middot; nothing changed</span><span class="badge b-blue">ai-prompt.txt &middot; key identifiers removed</span></div>
 <div class="note">Sharing note: this report (report.html) is NOT redacted - it shows your PC name and hardware, so share it only with the person helping you. For public help or pasting into an AI, use <span class="mono">out\ai-prompt.txt</span> instead (your username, PC name, and BIOS serial are removed - best-effort, not guaranteed).</div>
+<div class="headline hl-warn">Prime suspect: GPU display driver (NVIDIA GeForce RTX 3060 Ti) (confidence: high).</div>
 <div class="note">2 system crash(es) across 1 stop code(s), 37 unexplained restart(s), 3 app crash event(s) in the window.</div>
 <div class="note">All 2 system crashes share one stop code (0x116) - a consistent pattern leans toward a single software/driver cause.</div>
 <div class="note">Drive health - Windows reports basic status Healthy, but detailed SMART was not readable this run (2 of 2 drive(s)); run elevated to confirm. This is not a clean bill of drive health.</div>
@@ -60,7 +66,7 @@ td.k{color:var(--muted);width:42%}
 <p class="title">GPU display driver (NVIDIA GeForce RTX 3060 Ti)</p>
 <p class="ev for"><span class="mk">+</span> <span class="lbl">for:</span> GPU bugcheck(s) present: 0x116.</p>
 <p class="ev for"><span class="mk">+</span> <span class="lbl">for:</span> NVIDIA kernel driver reported 2 GPU reset/hang event(s) (Event 153/14) - direct evidence of GPU instability, not just a circumstantial code.</p>
-<p class="ev ag"><span class="mk">&minus;</span> <span class="lbl">against:</span> Drive health and the hardware-error log look clean - this points at the driver/GPU rather than a failing drive or CPU underneath.</p>
+<p class="ev ag"><span class="mk">&minus;</span> <span class="lbl">against:</span> The hardware-error log is clean and drive SMART status reads Healthy at the level checked (detailed SMART was not readable this run), so this points at the driver/GPU rather than a confirmed failing drive or CPU underneath.</p>
 <p class="confirm"><span class="lbl">confirm by:</span> Clean-reinstall the GPU driver with DDU (Display Driver Uninstaller), or roll back a version. If clean drivers do NOT stop it, swap-test the GPU (a failing card behaves exactly like this) - do not RMA on a guess.</p>
 <p class="search">search: Windows 11 NVIDIA GeForce RTX 3060 Ti display driver stopped responding TDR fix</p>
 </div>
@@ -72,6 +78,17 @@ td.k{color:var(--muted);width:42%}
 <p class="ev for"><span class="mk">+</span> <span class="lbl">for:</span> RAM is running above standard JEDEC speed (an XMP/DOCP/EXPO overclock is active) - test with it disabled; an unstable memory overclock is a common cause of no-dump restarts.</p>
 <p class="confirm"><span class="lbl">confirm by:</span> This is a symptom, not a diagnosis. Check in order: power (PSU, cables, wall outlet / surge protector), overheating (clean dust, verify temps), any overclock or XMP/DOCP profile, then enable full crash dumps (and disable auto-restart) so the next event is captured.</p>
 <p class="search">search: Windows 11 Kernel-Power 41 random restart no BSOD PSU thermal</p>
+</div>
+<div class="card">
+<div class="card-top"><span class="tier-tag">tier 2 &middot; possible</span><span class="conf c-med">confidence: medium</span></div>
+<p class="title">GPU hardware (NVIDIA GeForce RTX 3060 Ti)</p>
+<p class="ev for"><span class="mk">+</span> <span class="lbl">for:</span> The GPU instability above spans 2 independent evidence channels (out of TDR / GPU bugcheck / vendor driver event / flagged Display adapter) - a multi-channel pattern is consistent with the graphics card itself failing, not only its driver.</p>
+<p class="ev for"><span class="mk">+</span> <span class="lbl">for:</span> 2 separate crashes carry a hard GPU bugcheck (0x116) - a recurring GPU bugcheck (&gt;= 2 crashes, the bar before any hardware claim) keeps the card itself in suspicion alongside its driver.</p>
+<p class="ev for"><span class="mk">+</span> <span class="lbl">for:</span> This is a possibility to rule out, not a verdict: v0 reads the stop code from events only and cannot tell a failing card from a bad driver by these symptoms alone. Only a swap-test can.</p>
+<p class="ev ag"><span class="mk">&minus;</span> <span class="lbl">against:</span> A bad, mismatched, or corrupted display driver produces these EXACT symptoms and is the more common cause - rule the driver out first (a clean DDU reinstall) before suspecting the card.</p>
+<p class="ev ag"><span class="mk">&minus;</span> <span class="lbl">against:</span> The hardware-error log (WHEA) is clean this window - no logged hardware fault yet corroborates a dying card, so this stays a possibility, not a confirmed hardware verdict. (A clean log is not proof the card is fine.)</p>
+<p class="confirm"><span class="lbl">confirm by:</span> First rule out the driver - clean-reinstall it with DDU (Display Driver Uninstaller), or roll back a version. If crashes continue on known-good drivers, swap-test the GPU: move this card into another PC, or drop a known-good card into this one. A swap that changes the symptom is the proof. Do NOT RMA or replace the card on this report alone - the swap-test is what isolates the card from the rest of the system.</p>
+<p class="search">search: Windows 11 NVIDIA GeForce RTX 3060 Ti failing GPU swap test artifacts crash</p>
 </div>
 <div class="card">
 <div class="card-top"><span class="tier-tag tier-check">can't determine &middot; checklist</span><span class="conf c-ins">confidence: insufficient</span></div>
@@ -86,6 +103,23 @@ td.k{color:var(--muted);width:42%}
 <li>Devices - no problem devices in Device Manager.</li>
 <li>Hardware-error log (WHEA) - clean.</li>
 </ul></div>
+<div class="section-label">What was checked this run</div><div class="card"><table>
+<tr><td class="k">Crash / bugcheck history</td><td><span class="rd-ok">read</span></td></tr>
+<tr><td class="k">Hardware-error log (WHEA)</td><td><span class="rd-ok">read</span></td></tr>
+<tr><td class="k">Drive health (SMART rollup)</td><td><span class="rd-ok">read</span></td></tr>
+<tr><td class="k">Disk space (volumes)</td><td><span class="rd-ok">read</span></td></tr>
+<tr><td class="k">Windows Update failures</td><td><span class="rd-ok">read</span></td></tr>
+<tr><td class="k">Problem devices</td><td><span class="rd-ok">read</span></td></tr>
+<tr><td class="k">GPU timeouts / vendor errors</td><td><span class="rd-ok">read</span></td></tr>
+<tr><td class="k">Storage I/O errors</td><td><span class="rd-ok">read</span></td></tr>
+<tr><td class="k">Crash-dump write failures</td><td><span class="rd-ok">read</span></td></tr>
+<tr><td class="k">Application crashes</td><td><span class="rd-ok">read</span></td></tr>
+<tr><td class="k">Memory-diagnostic results</td><td><span class="rd-ok">read</span></td></tr>
+<tr><td class="k">Dirty-shutdown markers</td><td><span class="rd-ok">read</span></td></tr>
+<tr><td class="k">LiveKernelEvent reports</td><td><span class="rd-ok">read</span></td></tr>
+<tr><td class="k">Storage/filesystem corroborators</td><td><span class="rd-ok">read</span></td></tr>
+<tr><td class="k">SMART predictive-failure events</td><td><span class="rd-ok">read</span></td></tr>
+</table></div>
 <div class="section-label">System</div><div class="card"><table>
 <tr><td class="k">OS</td><td>Windows 11 Pro build 26100</td></tr>
 <tr><td class="k">Machine</td><td>ASUS System Product Name</td></tr>
@@ -95,9 +129,6 @@ td.k{color:var(--muted);width:42%}
 <tr><td class="k">Uptime</td><td>2d 7h</td></tr>
 </table></div>
 <div class="section-label">Drives</div><div class="card"><table>
-<tr><td class="k">WD Blue SN570 1TB (SSD, 932 GB)</td><td>Healthy &middot; detailed SMART not exposed</td></tr>
-<tr><td class="k">WDC WD40EZAZ (HDD, 3726 GB)</td><td>Healthy &middot; detailed SMART not exposed</td></tr>
 </table></div>
 <div class="foot">This is a read-only second opinion, not a verdict. Confirm before acting. To go deeper, paste <span class="mono">out\ai-prompt.txt</span> (key identifiers removed, best-effort) into ChatGPT or Claude. The full report.html is NOT redacted - keep it between you and your helper.</div>
 </div></body></html>
-
