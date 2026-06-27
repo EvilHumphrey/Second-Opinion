@@ -386,6 +386,17 @@ function Get-Fixtures {
         Volumes        = @( (_vol 'C:' 200 465 $false) )
     }
 
+    # device-pii-name (audit P2-1): a user-RENAMED non-display device whose FriendlyName embeds third-party PII
+    # (a possessive personal name). The culprit Title/Search must render the device CLASS + ProblemText ONLY -
+    # the raw name must NEVER reach the share-safe Helper Packet or the redacted AI prompt (the redaction map
+    # cannot know arbitrary device names). The golden asserts the name-free Title; a render guardrail asserts
+    # the prompt drops the name.
+    $f['device-pii-name'] = _data @{
+        ProblemDevices = @( (_pdev "Jordan's Buds" 'Bluetooth' 43 'Windows stopped it - device reported a problem (Code 43)') )
+        Drives         = @( (_drive 'Generic SSD' 'SSD' 500 'Healthy' $true) )
+        Volumes        = @( (_vol 'C:' 200 465 $false) )
+    }
+
     # xmp-off: a clean machine whose RAM sits at a JEDEC base (2133 MT/s) rated for more (3200), with no
     # XMP/DOCP/EXPO profile active. The "possible free performance" advisory must fire as a NOTE only -
     # never a culprit, never a tier. (A representative stutter case; the inverse of the XMP-on flag.)

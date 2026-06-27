@@ -589,8 +589,11 @@ function ConvertTo-BugcheckCodeString($value, [bool]$AllowDecimal) {
     $m = [regex]::Match($s, '0x[0-9A-Fa-f]{1,8}')
     if ($m.Success) { return Format-Bugcheck ([Convert]::ToInt64($m.Value, 16)) }
     if ($AllowDecimal -and $s -match '^\d+$') {
-        $n = [int64]$s
-        if ($n -ne 0) { return Format-Bugcheck $n }
+        # Guard the decimal cast: a corrupt/forged event can carry an all-digit value that overflows Int64 (a raw
+        # [int64] cast would THROW). TryParse fails safe to honest-abstention ($null) - no console stack trace,
+        # no wrong evidence. (P2-2 audit fix.)
+        $n = [int64]0
+        if ([int64]::TryParse($s, [ref]$n) -and $n -ne 0) { return Format-Bugcheck $n }
     }
     return $null
 }
@@ -1099,10 +1102,11 @@ function Get-CrashEvents($since) {
     if (-not $sig41.Readable) { $readable = $false }
     foreach ($e in $sig41.Items) {
         $xd = Get-EventXmlData $e
-        $bc = 0
-        if ($xd.Named.ContainsKey('BugcheckCode')) { $bc = [int64]$xd.Named['BugcheckCode'] }
+        # Route the untrusted event-XML BugcheckCode through the guarded parser (non-numeric / overflow -> $null)
+        # instead of a raw [int64] cast that would THROW on a corrupt/forged event and silently downgrade a coded
+        # crash to "no recorded cause". (P2-2 audit fix.)
         $codeStr = $null
-        if ($bc -ne 0) { $codeStr = Format-Bugcheck $bc }
+        if ($xd.Named.ContainsKey('BugcheckCode')) { $codeStr = ConvertTo-BugcheckCodeString $xd.Named['BugcheckCode'] $true }
         $crashes += [pscustomobject]@{ Time = $e.TimeCreated; Source = 'Kernel-Power 41'; BugcheckCode = $codeStr; DumpPath = $null }
     }
     [pscustomobject]@{ Items = @($crashes); Readable = $readable }
@@ -1788,10 +1792,16 @@ function New-Diagnosis($data) {
         # Some flagged devices have no Class (e.g. an uninstalled-driver "Network Controller"); avoid the
         # leading-space "  device flagged" by falling back to a plain article.
         $clsLabel = if ([string]::IsNullOrWhiteSpace($pd.Class)) { 'A' } else { $pd.Class }
-        $culprits += New-Culprit -Title "Problem device: $($pd.Name)" -TierClass 'driver' -Tier 2 -Confidence 'Medium' `
+        # P2-1 (audit): the Title/Search must NOT carry the raw PnP FriendlyName. A user-renamed device (e.g. a
+        # Bluetooth peripheral named after its owner) embeds third-party PII the redaction map cannot know, and it
+        # would ride into the share-safe Helper Packet + the redacted AI prompt. Render the device CLASS +
+        # ProblemText only - the tier/confidence never depended on the literal name, and the report's System table
+        # still lists the hardware. (Display devices are excluded above; they go through the GPU rule.)
+        $titleCls = if ([string]::IsNullOrWhiteSpace($pd.Class)) { '' } else { " ($($pd.Class))" }
+        $culprits += New-Culprit -Title "Problem device$titleCls" -TierClass 'driver' -Tier 2 -Confidence 'Medium' `
             -For @("$clsLabel device flagged in Device Manager: $($pd.ProblemText).") -Against @() `
             -ConfirmBy 'Update or reinstall this device''s driver and check it is seated/connected. Code 43/10 usually means a driver or the device itself.' `
-            -Search "$($pd.Name) $($pd.ProblemText) Windows 11 fix"
+            -Search "Windows 11 device $($pd.ProblemText) fix"
     }
 
     # J. App-level crashes (separate lane from system crashes).

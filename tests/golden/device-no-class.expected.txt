@@ -1,5 +1,5 @@
 counts crashes=0 distinct=0 unexplained=0 appcrash=0
-culprit | Problem device: Network Controller | driver | 2 | Medium
+culprit | Problem device | driver | 2 | Medium
 ruled | Drive health - all drives report SMART status Healthy.
 ruled | Disk space - no volume is critically low.
 ruled | Windows Update - no recent update failures.
