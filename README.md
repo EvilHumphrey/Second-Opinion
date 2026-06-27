@@ -148,10 +148,11 @@ identifier that survives into `ai-prompt.txt`? That's a bug worth reporting — 
 
 ## Trust the ranking (run the tests)
 
-The scorer is deterministic and guarded by a fixture harness — 33 snapshot fixtures plus 119 guardrail
+The scorer is deterministic and guarded by a fixture harness — 42 snapshot fixtures plus 165 guardrail
 assertions that must always hold (e.g. *a single GPU bugcheck is never tier-1*, *blank SMART is never
 "healthy"*, *dump-less restarts never reach High*, *real-but-sub-threshold signals never read as "clean"*,
-*a hostile device name can't inject HTML or AI-prompt instructions*). Run them yourself:
+*a corroborator like a SMART warning is never a lone verdict*, *a hostile device name can't inject HTML or
+AI-prompt instructions*). Run them yourself:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\Run-Fixtures.ps1
