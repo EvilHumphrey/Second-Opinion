@@ -105,6 +105,11 @@ Test under both `powershell.exe` (5.1) and `pwsh` (7).
 
 ## Positioning vs the field
 - vs Microsoft "PC Health Check" app: name collision avoided; that's an upgrade checker, not a triager.
-- vs Windows 2026 "Predictive Health" (the clock we race): we are read-only (vs their auto-apply
-  "Fix it"), portable/no-install, work on old/un-updated/offline boxes, AI-optional, third-party-helper.
+- vs Microsoft's 2026 crash-recovery push — the Windows Resiliency Initiative, Quick Machine Recovery,
+  Driver Quality Initiative, and Cloud-Initiated Driver Recovery (faulty-driver rollback via Windows
+  Update; rolling out 2026) — the clock we race (there is no MS product literally branded "Predictive
+  Health"). It makes basic recovery + driver remediation less exotic, but it auto-acts on the machine
+  and targets the common case: we are read-only (vs their auto-apply / auto-rollback), portable/no-install,
+  work on old/un-updated/offline boxes, AI-optional, third-party-helper — owning the ambiguous
+  real-world PC they are NOT targeting.
 - vs WhoCrashed / mcp-windbg / CrystalDiskInfo: all single-signal. We fuse + rank + abstain honestly.

@@ -27,19 +27,52 @@ $ErrorActionPreference = 'Continue'
 # ---------------------------------------------------------------------------
 # Paths + knowledge base
 # ---------------------------------------------------------------------------
-$ScriptRoot  = Split-Path -Parent $MyInvocation.MyCommand.Path
-# Repo layout = this script lives in a 'src' folder with a sibling 'data/bugchecks.json' (out/ at the repo
-# root). A STANDALONE single file (downloaded on its own) has no such sibling - anchor it to its OWN folder
-# so it writes out/ next to itself and falls back to the embedded KB. This lets the same file run both from
-# the repo AND as a one-file terminal download.
-$repoRoot = Split-Path -Parent $ScriptRoot
-if ($repoRoot -and (Test-Path (Join-Path (Join-Path $repoRoot 'data') 'bugchecks.json'))) {
-    $ProjectRoot = $repoRoot            # repo layout: src/ + data/ + out/ at the root
-} else {
-    $ProjectRoot = $ScriptRoot          # standalone: anchor to the script's own folder
+# Three invocation shapes resolve here (repo / standalone / run-from-web):
+#   repo layout - this script in a 'src' folder with a sibling 'data/bugchecks.json'; out/ at the repo root.
+#   standalone  - a single downloaded file, no sibling data/; out/ next to the file + the embedded KB.
+#   web-run     - irm <url> | iex  OR  & ([scriptblock]::Create((irm <url>))): there is NO script path on
+#                 disk, so external data/ is unavailable (embedded KB) and output defaults to the user's
+#                 Documents - NEVER the current directory, which on an elevated / Quick-Assist / pasted-
+#                 snippet shell can be System32 or anywhere. Read-only is unaffected: it means no machine
+#                 mutation, not "no report files" (the tool writes report.html + ai-prompt.txt by contract).
+# Resolve-SoPaths NEVER calls Split-Path/Join-Path on a null script path. It returns Error='no-outdir' ONLY
+# when there is no script path AND Documents cannot be resolved AND no -OutDir was given, so the caller can
+# fail clearly instead of silently writing somewhere surprising. -OutDir is honored in every mode.
+function Resolve-SoPaths {
+    param([string]$ScriptPath, [string]$OutDir, [string]$DocumentsPath)
+    if ($ScriptPath) {
+        $scriptRoot = Split-Path -Parent $ScriptPath
+        $repoRoot   = Split-Path -Parent $scriptRoot
+        if ($repoRoot -and (Test-Path (Join-Path (Join-Path $repoRoot 'data') 'bugchecks.json'))) {
+            $projectRoot = $repoRoot       # repo layout: src/ + data/ + out/ at the root
+            $mode = 'repo'
+        } else {
+            $projectRoot = $scriptRoot     # standalone single file: anchor to its own folder
+            $mode = 'standalone'
+        }
+        $dataDir = Join-Path $projectRoot 'data'
+        if (-not $OutDir) { $OutDir = Join-Path $projectRoot 'out' }
+        return @{ DataDir = $dataDir; OutDir = $OutDir; Mode = $mode; Error = $null }
+    }
+    # No script path (web-run): external data/ is unavailable -> embedded KB; default output to Documents.
+    if (-not $OutDir) {
+        if (-not $PSBoundParameters.ContainsKey('DocumentsPath')) {
+            $DocumentsPath = [Environment]::GetFolderPath('MyDocuments')
+        }
+        if ($DocumentsPath) {
+            $OutDir = Join-Path (Join-Path $DocumentsPath 'Second Opinion') 'out'
+        } else {
+            return @{ DataDir = $null; OutDir = $null; Mode = 'web'; Error = 'no-outdir' }
+        }
+    }
+    return @{ DataDir = $null; OutDir = $OutDir; Mode = 'web'; Error = $null }
 }
-$DataDir     = Join-Path $ProjectRoot 'data'
-if (-not $OutDir) { $OutDir = Join-Path $ProjectRoot 'out' }
+
+# Inline $MyInvocation.MyCommand.Path (do NOT bind a $ScriptPath variable - it would clobber the test
+# harness's same-named, case-insensitive $scriptPath when the tool is dot-sourced).
+$soPaths = Resolve-SoPaths -ScriptPath $MyInvocation.MyCommand.Path -OutDir $OutDir
+$DataDir = $soPaths.DataDir
+$OutDir  = $soPaths.OutDir
 
 function Invoke-Safe {
     param([scriptblock]$Script, $Default = $null)
@@ -47,6 +80,7 @@ function Invoke-Safe {
 }
 
 function Import-Kb($name) {
+    if (-not $DataDir) { return $null }   # web-run: no external data/ on disk -> caller uses the embedded KB
     $p = Join-Path $DataDir $name
     if (Test-Path $p) { Invoke-Safe { Get-Content -Raw -Path $p | ConvertFrom-Json } } else { $null }
 }
@@ -1800,6 +1834,7 @@ td.k{color:var(--muted);width:42%}
 # defined in the caller but no collector runs - so New-Diagnosis can be unit-tested against fixtures.
 # Direct execution (.\Invoke-SecondOpinion.ps1 / -File) continues into the read-only pipeline below.
 if ($MyInvocation.InvocationName -eq '.') { return }
+$script:SoPipelineEntered = $true   # reached ONLY on direct execution; the gate asserts dot-sourcing returns above this
 
 Write-Host 'Second Opinion - read-only diagnostic.' -ForegroundColor Cyan
 # Optional intake FIRST (so the user answers, then watches the scan). Auto-skips when -NoIntake is set
@@ -1858,6 +1893,13 @@ $data = [pscustomobject]@{
 
 $diag = New-Diagnosis $data
 
+if (-not $OutDir) {
+    Write-Host ''
+    Write-Host 'ERROR: Could not resolve an output folder. On a run-from-web start (irm | iex) this means your' -ForegroundColor Red
+    Write-Host 'Documents folder was unavailable. Re-run via the scriptblock form with an explicit -OutDir:' -ForegroundColor Red
+    Write-Host '  $so = irm <url>; & ([scriptblock]::Create($so)) -OutDir C:\Temp\SecondOpinion' -ForegroundColor Yellow
+    return
+}
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 $reportPath = Join-Path $OutDir 'report.html'
 $promptPath = Join-Path $OutDir 'ai-prompt.txt'

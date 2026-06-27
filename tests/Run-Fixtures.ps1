@@ -325,6 +325,37 @@ foreach ($rc in $kbChecks) {
     else { Write-Host "VIOLATED  $($rc.N)" -ForegroundColor Red; $afail++ }
 }
 
+# ---- No-script-path output contract (irm|iex / scriptblock web-run). The path bootstrap must NEVER
+#      Split-Path/Join-Path a null script path.
+#      With no script path: output defaults under the user's Documents (NEVER the current dir / System32) and
+#      -OutDir is honored; if Documents is unresolvable AND no -OutDir, Resolve-SoPaths returns
+#      Error='no-outdir' so the caller fails clearly. The Documents-default check passes an explicit
+#      -DocumentsPath so it is deterministic on any runner. Last check: dot-sourcing must STILL return before
+#      the read-only pipeline (a regression would set $SoPipelineEntered during this harness's own dot-source).
+$repoScript = (Resolve-Path $scriptPath).Path
+$pWeb       = Resolve-SoPaths -ScriptPath $null -OutDir $null
+$pWebDocs   = Resolve-SoPaths -ScriptPath $null -OutDir $null -DocumentsPath 'C:\Docs'
+$pWebOutDir = Resolve-SoPaths -ScriptPath $null -OutDir 'C:\Temp\SO-Test'
+$pWebFail   = Resolve-SoPaths -ScriptPath $null -OutDir $null -DocumentsPath ''
+$pRepo      = Resolve-SoPaths -ScriptPath $repoScript -OutDir $null
+$standalone = 'C:\SO-Standalone-Test\sub\Invoke-SecondOpinion.ps1'   # a lone file, no sibling data/bugchecks.json
+$pStand     = Resolve-SoPaths -ScriptPath $standalone -OutDir $null
+$pathChecks = @(
+    @{ N = 'web-run: no script path -> web mode with the embedded KB (DataDir null, no path errors)'; C = { ($pWeb.Mode -eq 'web') -and ($null -eq $pWeb.DataDir) } }
+    @{ N = 'web-run: with no -OutDir, output defaults under Documents\Second Opinion\out (never the current dir)'; C = { ($pWebDocs.OutDir -eq (Join-Path (Join-Path 'C:\Docs' 'Second Opinion') 'out')) -and (-not $pWebDocs.Error) } }
+    @{ N = 'web-run: an explicit -OutDir is honored even with no script path'; C = { ($pWebOutDir.OutDir -eq 'C:\Temp\SO-Test') -and (-not $pWebOutDir.Error) } }
+    @{ N = 'web-run: no script path AND no Documents AND no -OutDir -> fail-clear (Error=no-outdir, never a silent cwd/temp)'; C = { ($pWebFail.Error -eq 'no-outdir') -and ($null -eq $pWebFail.OutDir) } }
+    @{ N = 'repo layout: src/ script with a sibling data/bugchecks.json anchors the repo out/ and data/'; C = { ($pRepo.Mode -eq 'repo') -and ($pRepo.OutDir -match '\\out$') -and ($pRepo.DataDir -match '\\data$') } }
+    @{ N = 'standalone: a lone downloaded file (no sibling data/) writes out/ next to itself'; C = { ($pStand.Mode -eq 'standalone') -and ($pStand.OutDir -eq (Join-Path (Split-Path -Parent $standalone) 'out')) } }
+    @{ N = 'dot-source guard: dot-sourcing the tool returns before the read-only pipeline (no collectors ran)'; C = { -not $SoPipelineEntered } }
+)
+foreach ($rc in $pathChecks) {
+    $ok = $false
+    try { $ok = [bool](& $rc.C) } catch { $ok = $false }
+    if ($ok) { Write-Host "OK        $($rc.N)" -ForegroundColor Green; $apass++ }
+    else { Write-Host "VIOLATED  $($rc.N)" -ForegroundColor Red; $afail++ }
+}
+
 Write-Host ''
 if ($Update) {
     Write-Host ("Goldens updated for {0} fixture(s). Guardrails: {1} ok, {2} violated. Review the git diff." -f $fixtures.Count, $apass, $afail) -ForegroundColor Cyan
