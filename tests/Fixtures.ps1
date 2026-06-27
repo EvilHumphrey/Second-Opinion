@@ -37,6 +37,17 @@ function _live($codes, $readable = $true) {
     }
 }
 
+function _perf($throttle, $lowmem, $throttleReadable = $true, $lowmemReadable = $true) {
+    [pscustomobject]@{
+        Requested         = $true
+        ThrottleCount     = [int]$throttle
+        ThrottleReadable  = [bool]$throttleReadable
+        LowMemoryCount    = [int]$lowmem
+        LowMemoryReadable = [bool]$lowmemReadable
+        Readable          = ([bool]$throttleReadable -and [bool]$lowmemReadable)
+    }
+}
+
 function _data($h) {
     # Readability flags default to $true (a successful collection) unless a fixture overrides them.
     [pscustomobject]@{
@@ -75,6 +86,8 @@ function _data($h) {
         LiveKernelEvents     = if ($null -ne $h.LiveKernelEvents) { $h.LiveKernelEvents } else { _live @() }
         StorageCorroborators = if ($null -ne $h.StorageCorroborators) { $h.StorageCorroborators } else { _sig 0 }
         SmartPredictiveFailures = if ($null -ne $h.SmartPredictiveFailures) { $h.SmartPredictiveFailures } else { _sig 0 }
+        # Performance defaults to $null (perf smoke test NOT requested) so every existing fixture is byte-neutral.
+        Performance          = if ($null -ne $h.Performance) { $h.Performance } else { $null }
     }
 }
 
@@ -487,6 +500,45 @@ function Get-Fixtures {
         VolumesReadable = $false
         UpdatesReadable = $false
         Whea            = (_whea 0 0 0 $false)
+    }
+
+    # --- Opt-in performance smoke test (-PerformanceSmokeTest). All five set Performance (which the default
+    #     path leaves $null). They lock: throttling/low-memory ride as Observed/For-line, NEVER a culprit or
+    #     tier; a clean scan says so (not a clean bill); an unreadable scan is NOT-checked, not clean.
+
+    # perf-throttle-observed: a firmware-throttle CLUSTER (>=5) with no hardware/power node to attach to
+    # surfaces as an Observed weak signal (NOT a culprit), and suppresses the clean banner.
+    $f['perf-throttle-observed'] = _data @{
+        Performance = (_perf 8 0)
+    }
+
+    # perf-throttle-corroborates: throttling alongside a ranked hardware node (here the WHEA-fatal cpu node)
+    # adds a corroborating For-line to that node at ANY count - and must NOT move its tier/confidence, and must
+    # NOT also emit a lone Observed line. Compared against the whea-fatal baseline by the guardrail.
+    $f['perf-throttle-corroborates'] = _data @{
+        Whea        = (_whea 1 0 1)
+        Drives      = @( (_drive 'Generic SSD' 'SSD' 500 'Healthy' $true) )
+        Volumes     = @( (_vol 'C:' 200 465 $false) )
+        Performance = (_perf 3 0)
+    }
+
+    # perf-lowmem: Windows-diagnosed low-virtual-memory events surface as an Observed weak signal (never a
+    # culprit) and suppress the clean banner.
+    $f['perf-lowmem'] = _data @{
+        Performance = (_perf 0 4)
+    }
+
+    # perf-clean: the test ran, both signals readable and zero - this is NOT a clean bill of health, so the
+    # honest-abstention caveat note must be present, with NO Observed perf line and the perf readability rows
+    # shown as readable.
+    $f['perf-clean'] = _data @{
+        Performance = (_perf 0 0)
+    }
+
+    # perf-unreadable: both perf reads failed - NOT checked, not clean. Must raise the could-not-be-read note,
+    # set AllReadable false (clean banner suppressed), and never land in RuledOut.
+    $f['perf-unreadable'] = _data @{
+        Performance = (_perf 0 0 $false $false)
     }
 
     # empty: a clean machine -> zero culprits.

@@ -1,0 +1,6 @@
+counts crashes=0 distinct=0 unexplained=0 appcrash=0
+note | Performance smoke test (opt-in): checked CPU firmware-throttling (Kernel-Processor-Power 37) and low-virtual-memory events (Resource-Exhaustion-Detector 2004) over this window. This is a read-only scan of existing event logs - it does NOT read temperatures (native temps are out of scope) and a clean scan is NOT a clean bill of health (it cannot rule out overheating or a marginal/failing PSU).
+observed | CPU firmware-throttling: 8 Kernel-Processor-Power Event 37(s) in this window - the CPU was repeatedly clocked down by firmware. Occasional throttling under load, and routine throttling on a laptop / on battery / under a power-saver plan, is NORMAL; a persistent cluster during light use points to overheating, inadequate cooling, or a marginal/failing PSU. Watch temperatures under load (a separate tool - native temps are out of scope here). Not a fault on its own.
+ruled | Windows Update - no recent update failures.
+ruled | Devices - no problem devices in Device Manager.
+ruled | Hardware-error log (WHEA) - clean.

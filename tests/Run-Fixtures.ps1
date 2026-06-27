@@ -169,6 +169,17 @@ $asserts = @(
     @{ N = 'gpu-failure-01-intake: a done DDU adds the "points past the driver to the card" evidence to the hardware node'; F = 'gpu-failure-01-intake'; C = { param($d) $h = @($d.Culprits | Where-Object { $_.TierClass -eq 'gpuhw' }) | Select-Object -First 1; [bool]$h -and [bool](@($h.For) | Where-Object { $_ -match 'points past the driver to the card' }) } }
     @{ N = 'gpu-failure-01-intake: the hardware confirm retargets to the swap-test (DDU already done) and still warns against RMA'; F = 'gpu-failure-01-intake'; C = { param($d) $h = @($d.Culprits | Where-Object { $_.TierClass -eq 'gpuhw' }) | Select-Object -First 1; [bool]$h -and ($h.ConfirmBy -match 'swap-test the GPU now') -and ($h.ConfirmBy -match 'Do NOT RMA') } }
     @{ N = 'gpu-failure-01-intake: intake does NOT move the GPU-hardware ranking (still tier 2 / Medium)'; F = 'gpu-failure-01-intake'; C = { param($d) $h = @($d.Culprits | Where-Object { $_.TierClass -eq 'gpuhw' }) | Select-Object -First 1; [bool]$h -and ($h.Tier -eq 2) -and ($h.Confidence -eq 'Medium') } }
+    # --- Opt-in performance smoke test (-PerformanceSmokeTest). Stability-adjacent, NEVER an optimizer: every
+    #     signal rides Observed / a corroborating For-line / a Note, NEVER a culprit, NEVER a tier or confidence.
+    @{ N = 'perf-throttle-observed: a firmware-throttle cluster is Observed, never a culprit, and suppresses the clean banner'; F = 'perf-throttle-observed'; C = { param($d) (@($d.Culprits).Count -eq 0) -and [bool](@($d.Observed) | Where-Object { $_ -match 'firmware-throttling' -and $_ -match 'Not a fault on its own' }) -and ($d.CleanBanner -eq $false) } }
+    @{ N = 'perf-throttle-corroborates: throttling adds a For-line to the existing hardware (cpu) node only - no lone Observed line'; F = 'perf-throttle-corroborates'; C = { param($d) $c = @($d.Culprits | Where-Object { $_.TierClass -eq 'cpu' }) | Select-Object -First 1; [bool]$c -and [bool](@($c.For) | Where-Object { $_ -match 'firmware-throttling' -and $_ -match 'did not set or change' }) -and (-not [bool](@($d.Observed) | Where-Object { $_ -match 'firmware-throttling' })) } }
+    @{ N = 'perf-throttle-corroborates: throttling does NOT change the hardware node tier/confidence (vs whea-fatal baseline)'; F = 'perf-throttle-corroborates'; C = { param($d) $base = $diags['whea-fatal']; $bc = @($base.Culprits | Where-Object { $_.TierClass -eq 'cpu' }) | Select-Object -First 1; $c = @($d.Culprits | Where-Object { $_.TierClass -eq 'cpu' }) | Select-Object -First 1; [bool]$bc -and [bool]$c -and ($bc.Tier -eq $c.Tier) -and ($bc.Confidence -eq $c.Confidence) } }
+    @{ N = 'perf-lowmem: Windows-diagnosed low-memory events are Observed, never a culprit, and suppress the clean banner'; F = 'perf-lowmem'; C = { param($d) (@($d.Culprits).Count -eq 0) -and [bool](@($d.Observed) | Where-Object { $_ -match 'Memory pressure' -and $_ -match 'low-virtual-memory' }) -and ($d.CleanBanner -eq $false) } }
+    @{ N = 'perf-clean: a clean readable scan emits the honest-abstention caveat note (NOT a clean bill, NOT a temp check) with no Observed perf line'; F = 'perf-clean'; C = { param($d) [bool](@($d.Notes) | Where-Object { $_ -match 'Performance smoke test' -and $_ -match 'NOT a clean bill of health' -and $_ -match 'does NOT read temperatures' }) -and (-not [bool](@($d.Observed) | Where-Object { $_ -match 'firmware-throttling|Memory pressure' })) } }
+    @{ N = 'perf-clean: the perf readability rows are present AND readable'; F = 'perf-clean'; C = { param($d) $rows = @($d.Readability | Where-Object { $_.Signal -match 'firmware throttling|Low-memory events' }); (@($rows).Count -eq 2) -and (-not [bool](@($rows) | Where-Object { -not $_.Readable })) } }
+    @{ N = 'perf-unreadable: an unreadable scan is NOT-checked + AllReadable false + clean banner suppressed'; F = 'perf-unreadable'; C = { param($d) [bool](@($d.Notes) | Where-Object { $_ -match 'Performance smoke test' -and $_ -match 'could not be read' -and $_ -match 'NOT checked' }) -and ($d.AllReadable -eq $false) -and ($d.CleanBanner -eq $false) } }
+    @{ N = 'perf-unreadable: unreadable perf signals are NEVER falsely ruled out / clean'; F = 'perf-unreadable'; C = { param($d) -not [bool](@($d.RuledOut) | Where-Object { $_ -match 'throttl|virtual-memory|Resource-Exhaustion|Performance smoke' }) } }
+    @{ N = 'neutrality: with no perf request (switch OFF) the scorer adds NO perf note/observed/readability row and the clean banner is unchanged'; F = 'empty'; C = { param($d) (-not [bool](@($d.Notes) | Where-Object { $_ -match 'Performance smoke test' })) -and (-not [bool](@($d.Observed) | Where-Object { $_ -match 'firmware-throttling|Memory pressure' })) -and (-not [bool](@($d.Readability) | Where-Object { $_.Signal -match 'firmware throttling|Low-memory events' })) -and ($d.CleanBanner -eq $true) } }
 )
 $apass = 0; $afail = 0
 Write-Host ''
@@ -195,6 +206,23 @@ foreach ($gc in $gpuhwGlobalChecks) {
     try { $ok = [bool](& $gc.C) } catch { $ok = $false }
     if ($ok) { Write-Host "OK        $($gc.N)" -ForegroundColor Green; $apass++ }
     else { Write-Host "VIOLATED  $($gc.N)" -ForegroundColor Red; $afail++ }
+}
+
+# ---- Performance-smoke-test global invariant: the perf signals are EVIDENCE-ONLY and NEVER rank. Across the
+#      perf-only fixtures (no other signal present) the culprit list must be EMPTY - throttling / low-memory can
+#      never become a standalone culprit or tier - and adding the perf signal to an already-ranked case must not
+#      change the culprit COUNT (it only enriches an existing node with a For-line).
+$perfOnlyFixtures = @('perf-throttle-observed', 'perf-lowmem', 'perf-clean', 'perf-unreadable')
+$perfGlobalChecks = @(
+    @{ N = 'perf global: a perf signal alone NEVER creates a culprit (every perf-only fixture ranks zero culprits)'; C = { $bad = $false; foreach ($nm in $perfOnlyFixtures) { if (@($diags[$nm].Culprits).Count -ne 0) { $bad = $true } }; -not $bad } }
+    @{ N = 'perf global: corroborating an existing node does NOT add a culprit (count matches the whea-fatal baseline)'; C = { @($diags['perf-throttle-corroborates'].Culprits).Count -eq @($diags['whea-fatal'].Culprits).Count } }
+    @{ N = 'perf global: positive coverage - the perf signals DO surface as Observed weak signals'; C = { $seen = $false; foreach ($nm in $perfOnlyFixtures) { if (@($diags[$nm].Observed | Where-Object { $_ -match 'firmware-throttling|Memory pressure' }).Count -gt 0) { $seen = $true } }; $seen } }
+)
+foreach ($pgc in $perfGlobalChecks) {
+    $ok = $false
+    try { $ok = [bool](& $pgc.C) } catch { $ok = $false }
+    if ($ok) { Write-Host "OK        $($pgc.N)" -ForegroundColor Green; $apass++ }
+    else { Write-Host "VIOLATED  $($pgc.N)" -ForegroundColor Red; $afail++ }
 }
 
 # ---- Intake function checks: not fixture/New-Diagnosis based. These prove the questionnaire NEVER
@@ -449,6 +477,11 @@ $promptNoRuled = Build-AiPrompt $probeSys $diags['collection-failed'] (New-Redac
 $promptXmp     = Build-AiPrompt $probeSys $diags['xmp-off'] (New-RedactionMap $probeSys) $true
 $promptSmart52 = Build-AiPrompt $probeSys $diags['smart52-alone'] (New-RedactionMap $probeSys) $true
 $htmlSmart52   = Render-Html   $probeSys $diags['smart52-alone']
+$promptPerfThrottle = Build-AiPrompt $probeSys $diags['perf-throttle-observed'] (New-RedactionMap $probeSys) $true
+$htmlPerfThrottle   = Render-Html   $probeSys $diags['perf-throttle-observed']
+$promptPerfLowmem   = Build-AiPrompt $probeSys $diags['perf-lowmem'] (New-RedactionMap $probeSys) $true
+$promptPerfClean    = Build-AiPrompt $probeSys $diags['perf-clean'] (New-RedactionMap $probeSys) $true
+$htmlPerfClean      = Render-Html   $probeSys $diags['perf-clean']
 # Match the block HEADER ('=== USER-REPORTED SYMPTOMS'), not the bare phrase - the lead instruction
 # also mentions a "USER-REPORTED SYMPTOMS block", so only the === header proves the block itself fired.
 $renderChecks = @(
@@ -465,6 +498,11 @@ $renderChecks = @(
     @{ N = 'render: a blind-run prompt lists SIGNALS NOT READ THIS PASS'; C = { (Build-AiPrompt $probeSys $diags['blind-run'] (New-RedactionMap $probeSys) $true) -match 'SIGNALS NOT READ THIS PASS' } }
     @{ N = 'render: corroborator Observed lines reach the AI prompt via the existing Observed block'; C = { ($promptSmart52 -match 'OBSERVED BUT BELOW THRESHOLD') -and ($promptSmart52 -match 'SMART predictive-failure') } }
     @{ N = 'render: corroborator Observed lines reach report.html via the existing Observed section'; C = { ($htmlSmart52 -match 'Observed - real signals') -and ($htmlSmart52 -match 'SMART predictive-failure') } }
+    @{ N = 'render: a perf throttle Observed line reaches the AI prompt OBSERVED block'; C = { ($promptPerfThrottle -match 'OBSERVED BUT BELOW THRESHOLD') -and ($promptPerfThrottle -match 'firmware-throttling') } }
+    @{ N = 'render: a perf throttle Observed line reaches report.html via the Observed section'; C = { ($htmlPerfThrottle -match 'Observed - real signals') -and ($htmlPerfThrottle -match 'firmware-throttling') } }
+    @{ N = 'render: the perf low-memory Observed line reaches the AI prompt'; C = { $promptPerfLowmem -match 'Memory pressure' } }
+    @{ N = 'render: the clean-scan caveat note reaches the AI prompt (not a clean bill / not a temp check)'; C = { ($promptPerfClean -match 'Performance smoke test') -and ($promptPerfClean -match 'NOT a clean bill of health') } }
+    @{ N = 'render: the report readability matrix shows the perf rows when the test ran'; C = { ($htmlPerfClean -match 'CPU firmware throttling') -and ($htmlPerfClean -match 'Low-memory events') } }
 )
 foreach ($rc in $renderChecks) {
     $ok = $false
@@ -518,6 +556,7 @@ $packetStamp = [pscustomobject]@{ ToolVersion = $ScriptVersion; KbHash = 'TEST-K
 $packetWeak = New-HelperPacketArtifacts $redSys $diags['whea-corrected'] $redMap $packetStamp
 $packetSentinel = New-HelperPacketArtifacts $redSys $diags['empty'] $redMap $packetStamp
 $packetPartial = New-HelperPacketArtifacts $redSys $diags['partial-readable'] $redMap $packetStamp
+$packetPerf = New-HelperPacketArtifacts $redSys $diags['perf-throttle-observed'] $redMap $packetStamp
 $packetAllText = (@($packetSentinel.Values) -join "`n")
 $packetEvidenceObj = $packetSentinel['redacted-evidence.json'] | ConvertFrom-Json
 $packetBeforeFingerprint = Get-Fingerprint $diags['gpu-failure-01-intake']
@@ -531,6 +570,7 @@ $packetChecks = @(
     @{ N = 'helper-packet: unreadable-signals lists unreadable rows on partial-readable'; C = { ($packetPartial['unreadable-signals.txt'] -match 'Drive health') -and ($packetPartial['unreadable-signals.txt'] -match 'Hardware-error log') -and ($packetPartial['unreadable-signals.txt'] -match 'Treat each one as unknown') } }
     @{ N = 'helper-packet: redaction audit lists counts without masked values'; C = { ($packetSentinel['redaction-audit.txt'] -notmatch 'DESKTOP-RED01|redacted_user|SN-REDACT-77') -and ($packetSentinel['redaction-audit.txt'] -match 'Hostnames masked: [1-9]') -and ($packetSentinel['redaction-audit.txt'] -match 'Usernames masked: [1-9]') -and ($packetSentinel['redaction-audit.txt'] -match 'Serials masked: [1-9]') -and ($packetSentinel['redaction-audit.txt'] -match 'MAC addresses masked: [1-9]') -and ($packetSentinel['redaction-audit.txt'] -match 'IPv4 addresses masked: [1-9]') -and ($packetSentinel['redaction-audit.txt'] -match 'IPv6 addresses masked: [1-9]') } }
     @{ N = 'helper-packet: building the packet does not mutate the diagnosis fingerprint'; C = { $packetBeforeFingerprint -eq $packetAfterFingerprint } }
+    @{ N = 'helper-packet: a perf Observed line reaches the helper-summary Observed weak-signals section'; C = { ($packetPerf['helper-summary.md'] -match 'Observed weak signals') -and ($packetPerf['helper-summary.md'] -match 'firmware-throttling') } }
 )
 foreach ($pc in $packetChecks) {
     $ok = $false

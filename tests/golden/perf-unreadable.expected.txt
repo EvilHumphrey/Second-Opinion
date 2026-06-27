@@ -1,0 +1,6 @@
+counts crashes=0 distinct=0 unexplained=0 appcrash=0
+note | Performance smoke test (opt-in): checked CPU firmware-throttling (Kernel-Processor-Power 37) and low-virtual-memory events (Resource-Exhaustion-Detector 2004) over this window. This is a read-only scan of existing event logs - it does NOT read temperatures (native temps are out of scope) and a clean scan is NOT a clean bill of health (it cannot rule out overheating or a marginal/failing PSU).
+note | Performance smoke test: CPU firmware-throttling (Kernel-Processor-Power 37); low-virtual-memory events (Resource-Exhaustion-Detector 2004) could not be read this run - NOT checked, not clean. (These reads can fail when a log is busy or access is limited.)
+ruled | Windows Update - no recent update failures.
+ruled | Devices - no problem devices in Device Manager.
+ruled | Hardware-error log (WHEA) - clean.

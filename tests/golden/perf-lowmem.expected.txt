@@ -1,0 +1,6 @@
+counts crashes=0 distinct=0 unexplained=0 appcrash=0
+note | Performance smoke test (opt-in): checked CPU firmware-throttling (Kernel-Processor-Power 37) and low-virtual-memory events (Resource-Exhaustion-Detector 2004) over this window. This is a read-only scan of existing event logs - it does NOT read temperatures (native temps are out of scope) and a clean scan is NOT a clean bill of health (it cannot rule out overheating or a marginal/failing PSU).
+observed | Memory pressure: 4 low-virtual-memory event(s) diagnosed by Windows (Resource-Exhaustion-Detector 2004) in this window - a process may be leaking memory, or RAM is undersized for the workload; this can cause app crashes, freezes, or stutter. Investigate what is consuming memory under load (Task Manager > Details > Memory). Not a hardware fault on its own.
+ruled | Windows Update - no recent update failures.
+ruled | Devices - no problem devices in Device Manager.
+ruled | Hardware-error log (WHEA) - clean.

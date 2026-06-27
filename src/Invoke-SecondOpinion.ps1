@@ -22,6 +22,7 @@ param(
     [switch]$NoIntake,
     [switch]$DeepDump,
     [switch]$HelperPacket,
+    [switch]$PerformanceSmokeTest,
     [string]$Baseline
 )
 
@@ -1275,6 +1276,30 @@ function Get-MemDiagFailed($since) {
     [pscustomobject]@{ Failed = ($sig.Count -ge 1); Readable = $sig.Readable }
 }
 
+function Get-PerformanceSignals($since) {
+    # OPT-IN (-PerformanceSmokeTest) stability-adjacent performance scan. READ-ONLY: two existing System-log
+    # event reads, no load, no benchmark. These NEVER rank a culprit on their own - the scorer surfaces them
+    # as Observed weak signals or a corroborating For-line, never a verdict (see New-Diagnosis). Both providers
+    # log to the System log (verified on the dev box). Native temperatures stay OUT of scope (DESIGN) - Event
+    # 37 is the DESIGN-sanctioned indirect thermal/power proxy, not a temperature read.
+    #   Kernel-Processor-Power 37     = the CPU was clocked down by firmware (thermal, power, or current limit,
+    #                                   or a power-plan setting). Benign on laptops / battery / power-saver.
+    #   Resource-Exhaustion-Detector  = Windows itself diagnosed a low-virtual-memory condition (Event 2004) -
+    #     2004                          a direct cause of app crashes, freezes, and stutter. Count only (no
+    #                                   process-name extraction in v0: that is machine-derived string / PII +
+    #                                   injection surface for no ranking benefit; the count is enough to flag).
+    $throttle = Get-EventSignal 'System' 37 'Microsoft-Windows-Kernel-Processor-Power' $since
+    $lowMem   = Get-EventSignal 'System' 2004 'Microsoft-Windows-Resource-Exhaustion-Detector' $since
+    [pscustomobject]@{
+        Requested         = $true
+        ThrottleCount     = $throttle.Count
+        ThrottleReadable  = $throttle.Readable
+        LowMemoryCount    = $lowMem.Count
+        LowMemoryReadable = $lowMem.Readable
+        Readable          = ([bool]$throttle.Readable -and [bool]$lowMem.Readable)
+    }
+}
+
 function Get-DriveHealth {
     $drives = @()
     $readable = $true
@@ -1506,6 +1531,7 @@ function New-Diagnosis($data) {
     $culprits = @(); $ruledOut = @(); $notes = @()
     $deepObserved = @()
     $corroboratorObserved = @()
+    $perfObserved = @()
     $deepDumpBlocksClean = $false
 
     # Normalize the system-crash set. 1001 carries the WER bugcheck record; a BSOD can also raise a
@@ -1536,6 +1562,10 @@ function New-Diagnosis($data) {
     if (-not $storageCorroborators) { $storageCorroborators = [pscustomobject]@{ Items = @(); Count = 0; Readable = $true } }
     $smartPredictiveFailures = $data.SmartPredictiveFailures
     if (-not $smartPredictiveFailures) { $smartPredictiveFailures = [pscustomobject]@{ Items = @(); Count = 0; Readable = $true } }
+    # Opt-in performance smoke test. $perf is $null unless -PerformanceSmokeTest ran the collector, so the
+    # default path adds NOTHING (byte-neutral). Every performance code path below is gated on $perfRequested.
+    $perf = $data.Performance
+    $perfRequested = [bool]($perf -and $perf.Requested)
 
     # Consistency meta-rule (the core expert heuristic).
     if ($crashCount -ge 2) {
@@ -1935,6 +1965,53 @@ function New-Diagnosis($data) {
         if (-not $matched) { $corroboratorObserved += $line }
     }
 
+    # ---- Opt-in performance smoke test (-PerformanceSmokeTest). STABILITY-ADJACENT, NEVER an "optimizer":
+    #      every output is an OBSERVATION + the cheapest reversible diagnostic step, never a tuning action.
+    #      Like the corroborators above, these are evidence-only: a firmware-throttle signal can add a
+    #      supporting For line to an already-ranked hardware/power node (cpu / power / handoff = the
+    #      "WHEA / no-dump" nodes), else it becomes an Observed weak signal once it clusters; low-memory
+    #      events are always Observed. They NEVER create a culprit and NEVER change a tier or confidence.
+    #      Native temperatures stay OUT (DESIGN): Event 37 is the indirect thermal/power proxy, not a temp.
+    if ($perfRequested) {
+        # A perf summary note is ALWAYS emitted when the test ran, so the honest-abstention caveat (a clean
+        # scan is NOT a clean bill and NOT a temperature check) is visible whether or not anything fired.
+        $notes += 'Performance smoke test (opt-in): checked CPU firmware-throttling (Kernel-Processor-Power 37) and low-virtual-memory events (Resource-Exhaustion-Detector 2004) over this window. This is a read-only scan of existing event logs - it does NOT read temperatures (native temps are out of scope) and a clean scan is NOT a clean bill of health (it cannot rule out overheating or a marginal/failing PSU).'
+
+        # Honest abstention for an unreadable perf read: NOT checked, not clean (absence is not proof clean).
+        $perfUnreadable = @()
+        if (-not $perf.ThrottleReadable)  { $perfUnreadable += 'CPU firmware-throttling (Kernel-Processor-Power 37)' }
+        if (-not $perf.LowMemoryReadable) { $perfUnreadable += 'low-virtual-memory events (Resource-Exhaustion-Detector 2004)' }
+        if ($perfUnreadable.Count -gt 0) {
+            $notes += "Performance smoke test: $($perfUnreadable -join '; ') could not be read this run - NOT checked, not clean. (These reads can fail when a log is busy or access is limited.)"
+        }
+
+        # CPU/firmware throttling (Event 37). Corroborates an already-ranked CPU/power/hardware-handoff node
+        # at any count; standing alone it surfaces as an Observed weak signal ONLY once it clusters (>= 5),
+        # because occasional throttling - and routine throttling on a laptop / battery / power-saver - is
+        # normal and a lower bar would scare a healthy box.
+        if ($perf.ThrottleReadable -and [int]$perf.ThrottleCount -gt 0) {
+            $tc = [int]$perf.ThrottleCount
+            $matched = $false
+            foreach ($c in @($culprits)) {
+                if ($c.TierClass -in 'cpu', 'power', 'handoff') {
+                    $c.For = @($c.For) + "CPU firmware-throttling: $tc Kernel-Processor-Power Event 37(s) in this window - the CPU was clocked down by firmware (thermal, power, or current limit). Corroborates a thermal/power story; corroborates only - it did not set or change any tier or confidence."
+                    $matched = $true
+                }
+            }
+            if (-not $matched -and $tc -ge 5) {
+                $perfObserved += "CPU firmware-throttling: $tc Kernel-Processor-Power Event 37(s) in this window - the CPU was repeatedly clocked down by firmware. Occasional throttling under load, and routine throttling on a laptop / on battery / under a power-saver plan, is NORMAL; a persistent cluster during light use points to overheating, inadequate cooling, or a marginal/failing PSU. Watch temperatures under load (a separate tool - native temps are out of scope here). Not a fault on its own."
+            }
+        }
+
+        # Low-virtual-memory (Event 2004). Always an Observed weak signal - Windows itself diagnosed the
+        # low-memory condition. The cheapest diagnostic step is to watch memory use under load (NOT a
+        # tuning directive like "buy RAM" or "raise the pagefile").
+        if ($perf.LowMemoryReadable -and [int]$perf.LowMemoryCount -gt 0) {
+            $lm = [int]$perf.LowMemoryCount
+            $perfObserved += "Memory pressure: $lm low-virtual-memory event(s) diagnosed by Windows (Resource-Exhaustion-Detector 2004) in this window - a process may be leaking memory, or RAM is undersized for the workload; this can cause app crashes, freezes, or stutter. Investigate what is consuming memory under load (Task Manager > Details > Memory). Not a hardware fault on its own."
+        }
+    }
+
     # ---- Optional user-reported intake (deterministic). It NEVER changes a tier or confidence - it
     #      only adds evidence lines / notes and retargets confirm steps, so every guardrail still holds
     #      (the measured signals keep driving the ranking; self-reported symptoms inform the narrative).
@@ -2081,6 +2158,7 @@ function New-Diagnosis($data) {
     $observed = @()
     foreach ($do in @($deepObserved)) { $observed += $do }
     foreach ($co in @($corroboratorObserved)) { $observed += $co }
+    foreach ($po in @($perfObserved)) { $observed += $po }
     if ($data.Whea.Readable -and $data.Whea.Total -gt 0 -and $data.Whea.Fatal -eq 0 -and ($codesPresent -notcontains '0x124')) {
         $wc = if ($data.Whea.Corrected -gt 0) { $data.Whea.Corrected } else { $data.Whea.Total }
         $observed += "Hardware-error log (WHEA): $wc non-fatal/corrected event(s) seen. Not a fault on its own (often thermal, power, or a marginal RAM/XMP overclock), but the WHEA log is NOT clean. It escalates to a hardware suspect if the count keeps climbing or a fatal WHEA appears - re-test with any XMP/EXPO profile and overclock disabled."
@@ -2118,9 +2196,14 @@ function New-Diagnosis($data) {
     # AllReadable: every gated signal was actually read - the MAIN signals AND the culprit-only event
     # signals. The "came back clean" banner shows ONLY when true, so an unreadable GPU/storage/etc. read
     # can no longer flash "all clean" when we simply could not look (Slice B residual completion).
+    # When the perf smoke test was requested, its readability folds in too (an unreadable requested perf read
+    # must not flash "all clean"). When not requested, perf is absent and never affects AllReadable.
+    $perfAllReadable = $true
+    if ($perfRequested) { $perfAllReadable = ([bool]$perf.ThrottleReadable -and [bool]$perf.LowMemoryReadable) }
     $allReadable = ([bool]$data.CrashesReadable -and [bool]$data.DrivesReadable -and [bool]$data.VolumesReadable -and [bool]$data.UpdatesReadable -and [bool]$data.DevicesReadable -and [bool]$data.Whea.Readable -and `
             [bool]$data.TdrReadable -and [bool]$data.GpuVendorReadable -and [bool]$data.StorageReadable -and [bool]$data.DumpFailuresReadable -and [bool]$data.AppCrashesReadable -and [bool]$data.MemDiagReadable -and `
-            [bool]$dirtyShutdowns.Readable -and [bool]$liveKernelEvents.Readable -and [bool]$storageCorroborators.Readable -and [bool]$smartPredictiveFailures.Readable)
+            [bool]$dirtyShutdowns.Readable -and [bool]$liveKernelEvents.Readable -and [bool]$storageCorroborators.Readable -and [bool]$smartPredictiveFailures.Readable -and `
+            $perfAllReadable)
 
     # The green "came back clean" banner shows ONLY when every signal was readable AND there are no
     # culprits AND no observed weak signals - so corrected WHEA, sub-threshold storage, or update
@@ -2173,6 +2256,11 @@ function New-Diagnosis($data) {
         [pscustomobject]@{ Signal = 'Storage/filesystem corroborators'; Readable = [bool]$storageCorroborators.Readable }
         [pscustomobject]@{ Signal = 'SMART predictive-failure events';  Readable = [bool]$smartPredictiveFailures.Readable }
     )
+    # Perf-smoke rows appear ONLY when the opt-in test ran, so the default-path readability matrix is unchanged.
+    if ($perfRequested) {
+        $readability += [pscustomobject]@{ Signal = 'CPU firmware throttling (Kernel-Processor-Power 37)'; Readable = [bool]$perf.ThrottleReadable }
+        $readability += [pscustomobject]@{ Signal = 'Low-memory events (Resource-Exhaustion-Detector 2004)';  Readable = [bool]$perf.LowMemoryReadable }
+    }
 
     # Trend snapshot: comparison-only evidence exported for -Baseline / redacted-evidence.json. This is
     # intentionally computed AFTER scoring and never feeds a culprit rule, tier, confidence, or ordering.
@@ -3266,6 +3354,13 @@ $liveSig  = Get-LiveKernelEvents $since
 $stCorSig = Get-StorageCorroboratorEvents $since
 $smart52Sig = Get-SmartPredictiveFailureEvents $since
 $memSig   = Get-MemDiagFailed $since
+# Opt-in performance smoke test (-PerformanceSmokeTest): read-only, default OFF. When the switch is absent
+# $perfSig stays $null and New-Diagnosis runs ZERO performance logic, so the default path is byte-neutral.
+$perfSig  = $null
+if ($PerformanceSmokeTest) {
+    Write-Host 'Running the performance smoke test (read-only, opt-in)...' -ForegroundColor Cyan
+    $perfSig = Get-PerformanceSignals $since
+}
 $script:LastDrives = $driveSig.Items
 $data = [pscustomobject]@{
     Crashes              = $crashSig.Items
@@ -3304,6 +3399,7 @@ $data = [pscustomobject]@{
     RamRatedSpeed        = $sys.RamRatedSpeed
     Intake               = $intake
     DeepDump             = $deepDumpSig
+    Performance          = $perfSig
 }
 
 $diag = New-Diagnosis $data

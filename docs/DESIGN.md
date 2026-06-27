@@ -84,9 +84,27 @@ the AI's framing (surfaced as a report card + a `=== USER-REPORTED SYMPTOMS ===`
 flagged ground-truth). This keeps every guardrail structurally intact — a user's report can't promote a
 thin signal to a hardware verdict.
 
+## Optional performance smoke test (opt-in; stability-adjacent, NEVER an "optimizer")
+A `-PerformanceSmokeTest` switch (default OFF) runs one extra read-only collector (`Get-PerformanceSignals`)
+that reads two existing System-log signals correlated with instability + poor performance: **CPU/firmware
+throttling** (`Kernel-Processor-Power` Event 37 — the DESIGN-sanctioned *indirect thermal/power proxy*, the
+read-only stand-in for the declined kernel temp driver) and **memory pressure** (`Resource-Exhaustion-Detector`
+Event 2004, low-virtual-memory; count only). Like the corroborators, these are **evidence-only**: a throttle
+signal adds a `For` line to an already-ranked hardware/power node (`cpu`/`power`/`handoff`) at any count, or
+becomes an `Observed` weak signal once it clusters (`>= 5`); low-memory events are always `Observed`. **They
+never create a culprit and never change a tier or confidence.** It is stability-adjacent diagnostics, NOT a PC
+optimizer: every output is an observation + the cheapest reversible diagnostic step (watch temps / check
+cooling / investigate memory use), never a tuning action (no startup/service/registry/pagefile/power-plan
+changes, no benchmark or synthetic load). Honest abstention is load-bearing here: when the test runs it ALWAYS
+emits a caveat note that a clean scan is **NOT a clean bill of health and NOT a temperature check** (it cannot
+rule out overheating or a marginal PSU); an unreadable read is "NOT checked, not clean" (suppresses the clean
+banner), never "good". Opt-in + golden-neutral: the switch-OFF path is byte-identical (every perf path is gated
+on `$perfRequested`).
+
 ## Deliberately OUT of v0 (swamps that look easy)
 - **Native CPU/GPU temps** — no reliable native API; the real path is a signed kernel driver,
-  which breaks the read-only promise. Use indirect signals (WHEA events, KP41 clustering) instead.
+  which breaks the read-only promise. Use indirect signals (WHEA events, KP41 clustering, and the opt-in
+  `-PerformanceSmokeTest`'s `Kernel-Processor-Power 37` firmware-throttle proxy) instead.
 - **Real minidump `!analyze`** — needs WinDbg + symbol downloads. Optional "deep mode" later.
   v0 reports the bugcheck *code + name* from events only; it does not claim the faulting driver.
 - **Deep per-attribute SMART** — needs elevation / bundled smartctl. v0 uses HealthStatus + Wear%.

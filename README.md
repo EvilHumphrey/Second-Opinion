@@ -61,6 +61,9 @@ Options:
 - `-Baseline <path>` — *(optional)* compare this run against a saved `redacted-evidence.json` from a prior run
   and add a **"what changed since the baseline"** section (notes only — it never changes the ranking; honest
   when the baseline is missing or unreadable).
+- `-PerformanceSmokeTest` — *(optional)* a read-only, stability-adjacent scan of existing event logs for
+  CPU firmware-throttling and low-memory pressure. Not a benchmark, not an optimizer, not a temperature check;
+  surfaces only as weak/corroborating evidence and never changes the ranking. A clean scan is not a clean bill.
 
 **Or run it as a single file:** `src/Invoke-SecondOpinion.ps1` is self-contained (it embeds the bugcheck
 knowledge base), so you can download just that one file and run it from any terminal — no folder, nothing to
@@ -164,7 +167,7 @@ identifier that survives into `ai-prompt.txt`? That's a bug worth reporting — 
 
 ## Trust the ranking (run the tests)
 
-The scorer is deterministic and guarded by a fixture harness — 45 snapshot fixtures plus 187 guardrail
+The scorer is deterministic and guarded by a fixture harness — 50 snapshot fixtures plus 205 guardrail
 assertions that must always hold (e.g. *a single GPU bugcheck is never tier-1*, *blank SMART is never
 "healthy"*, *dump-less restarts never reach High*, *real-but-sub-threshold signals never read as "clean"*,
 *a corroborator like a SMART warning is never a lone verdict*, *a hostile device name can't inject HTML or
