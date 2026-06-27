@@ -1,0 +1,6 @@
+counts crashes=0 distinct=0 unexplained=0 appcrash=0
+note | Some corroborator signals could not be read this run (dirty-shutdown markers (EventLog 6008 / Kernel-Boot 27); LiveKernelEvent reports (WER 1001); storage/filesystem corroborators (Ntfs 55 / disk 157); SMART predictive-failure events (disk 52)) - related weak evidence may be UNDER-reported, so the absence of an Observed note below is not proof the window is clean.
+ruled | Disk space - no volume is critically low.
+ruled | Windows Update - no recent update failures.
+ruled | Devices - no problem devices in Device Manager.
+ruled | Hardware-error log (WHEA) - clean.

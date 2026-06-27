@@ -1,0 +1,7 @@
+counts crashes=0 distinct=0 unexplained=0 appcrash=0
+observed | Dirty shutdown markers: 2 unexpected shutdown event(s) in the window - could be power loss, a hard reset, or a crash; corroborates instability when crashes are also present, but NOT a fault on its own. Corroborates only; it did not set or change any tier or confidence.
+ruled | Drive health - all drives report SMART status Healthy.
+ruled | Disk space - no volume is critically low.
+ruled | Windows Update - no recent update failures.
+ruled | Devices - no problem devices in Device Manager.
+ruled | Hardware-error log (WHEA) - clean.

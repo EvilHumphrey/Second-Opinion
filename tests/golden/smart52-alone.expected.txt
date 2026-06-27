@@ -1,0 +1,6 @@
+counts crashes=0 distinct=0 unexplained=0 appcrash=0
+observed | SMART predictive-failure event: 1 disk Event 52 event(s) logged; back up important data and verify with CrystalDiskInfo. This can be thermal or transient and is NOT a lone verdict. Corroborates only; it did not set or change any tier or confidence.
+ruled | Disk space - no volume is critically low.
+ruled | Windows Update - no recent update failures.
+ruled | Devices - no problem devices in Device Manager.
+ruled | Hardware-error log (WHEA) - clean.

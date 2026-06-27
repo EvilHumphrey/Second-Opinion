@@ -23,6 +23,19 @@ function _vol($d, $free, $size, $low) { [pscustomobject]@{ Drive = $d; Label = '
 function _intake($crash, $when, $freq, $tried, $tweaks) { [pscustomobject]@{ CrashBehavior = [int]$crash; When = [int]$when; Frequency = [int]$freq; Tried = @($tried); Tweaks = @($tweaks) } }
 function _dumpcfg($cde, $ar, $readable = $true) { [pscustomobject]@{ CrashDumpEnabled = $cde; AutoReboot = $ar; Readable = $readable } }
 function _pdev($name, $class, $code, $text, $status = 'Error') { [pscustomobject]@{ Name = $name; Class = $class; Status = $status; ProblemCode = $code; ProblemText = $text } }
+function _sig($count, $readable = $true) { [pscustomobject]@{ Items = @(); Count = [int]$count; Readable = [bool]$readable } }
+function _dirty($unexpected, $boot = 0, $readable = $true) { [pscustomobject]@{ Items = @(); Count = ([int]$unexpected + [int]$boot); UnexpectedCount = [int]$unexpected; BootCount = [int]$boot; Readable = [bool]$readable } }
+function _live($codes, $readable = $true) {
+    $c = @($codes | ForEach-Object { [string]$_ })
+    [pscustomobject]@{
+        Items    = @()
+        Count    = @($c).Count
+        GpuCount = @($c | Where-Object { $_ -in '117', '141' }).Count
+        UsbCount = @($c | Where-Object { $_ -eq '144' }).Count
+        Codes    = @($c)
+        Readable = [bool]$readable
+    }
+}
 
 function _data($h) {
     # Readability flags default to $true (a successful collection) unless a fixture overrides them.
@@ -58,6 +71,10 @@ function _data($h) {
         Intake          = if ($null -ne $h.Intake) { $h.Intake } else { $null }
         DumpConfig      = if ($null -ne $h.DumpConfig) { $h.DumpConfig } else { $null }
         DeepDump        = if ($null -ne $h.DeepDump) { $h.DeepDump } else { $null }
+        DirtyShutdowns       = if ($null -ne $h.DirtyShutdowns) { $h.DirtyShutdowns } else { _dirty 0 0 }
+        LiveKernelEvents     = if ($null -ne $h.LiveKernelEvents) { $h.LiveKernelEvents } else { _live @() }
+        StorageCorroborators = if ($null -ne $h.StorageCorroborators) { $h.StorageCorroborators } else { _sig 0 }
+        SmartPredictiveFailures = if ($null -ne $h.SmartPredictiveFailures) { $h.SmartPredictiveFailures } else { _sig 0 }
     }
 }
 
@@ -355,6 +372,75 @@ function Get-Fixtures {
         UpdateFailures = 3
         Drives         = @( (_drive 'Generic SSD' 'SSD' 500 'Healthy' $true) )
         Volumes        = @( (_vol 'C:' 200 465 $false) )
+    }
+
+    # dirty-shutdown-alone: EventLog 6008 is real instability context, but by itself it is only Observed.
+    $f['dirty-shutdown-alone'] = _data @{
+        DirtyShutdowns = (_dirty 2 2)
+        Drives         = @( (_drive 'Generic SSD' 'SSD' 500 'Healthy' $true) )
+        Volumes        = @( (_vol 'C:' 200 465 $false) )
+    }
+
+    # dirty-shutdown-ranked: the same dirty-shutdown marker can support an already-ranked power/hard-reset
+    # checklist node, but it must not change the node's checklist tier or Insufficient confidence.
+    $dirtyKp = @(); for ($i = 1; $i -le 6; $i++) { $dirtyKp += (_crash (-($i * 30)) 'Kernel-Power 41' $null) }
+    $f['dirty-shutdown-ranked'] = _data @{
+        Crashes        = $dirtyKp
+        DirtyShutdowns = (_dirty 2 2)
+    }
+
+    # livekernel-alone: LiveKernelEvent reports are recovered/non-fatal hardware-driver hiccups, not crashes.
+    $f['livekernel-alone'] = _data @{
+        LiveKernelEvents = (_live @('141', '144'))
+        Drives           = @( (_drive 'Generic SSD' 'SSD' 500 'Healthy' $true) )
+        Volumes          = @( (_vol 'C:' 200 465 $false) )
+    }
+
+    # livekernel-ranked: LiveKernelEvent 141 can support an already-ranked GPU node, but cannot move it.
+    $f['livekernel-ranked'] = _data @{
+        Crashes          = @( (_crash 0 'BugCheck 1001' '0x116') )
+        LiveKernelEvents = (_live @('141'))
+        Drives           = @( (_drive 'Generic SSD' 'SSD' 500 'Healthy' $true) )
+        Volumes          = @( (_vol 'C:' 200 465 $false) )
+    }
+
+    # storage-corroborator-alone: Ntfs 55 / disk 157 are visible weak signals when no storage node exists.
+    $f['storage-corroborator-alone'] = _data @{
+        StorageCorroborators = (_sig 2)
+        Drives               = @( (_drive 'Generic SSD' 'SSD' 500 'Healthy' $true) )
+        Volumes              = @( (_vol 'C:' 200 465 $false) )
+    }
+
+    # storage-corroborator-ranked: storage/filesystem corroborators add a For line to the storage node only.
+    $f['storage-corroborator-ranked'] = _data @{
+        Crashes              = @( (_crash 0 'BugCheck 1001' '0x7A') )
+        StorageCorroborators = (_sig 1)
+        Drives               = @( (_drive 'Generic SSD' 'SSD' 500 'Healthy' $true) )
+        Volumes              = @( (_vol 'C:' 200 465 $false) )
+    }
+
+    # smart52-alone: disk Event 52 is urgent to verify, but still not a lone tier-1/High drive verdict.
+    $f['smart52-alone'] = _data @{
+        SmartPredictiveFailures = (_sig 1)
+        Drives                  = @( (_drive 'Generic SSD' 'SSD' 500 'Healthy' $true) )
+        Volumes                 = @( (_vol 'C:' 200 465 $false) )
+    }
+
+    # smart52-ranked: disk Event 52 supports an already-ranked drive-health node without changing it.
+    $f['smart52-ranked'] = _data @{
+        SmartPredictiveFailures = (_sig 1)
+        Drives                  = @( (_drive 'Generic SSD' 'SSD' 500 'Warning' $true) )
+        Volumes                 = @( (_vol 'C:' 200 465 $false) )
+    }
+
+    # corroborators-unreadable: failed corroborator reads suppress the clean banner and say under-reported.
+    $f['corroborators-unreadable'] = _data @{
+        DirtyShutdowns           = (_dirty 0 0 $false)
+        LiveKernelEvents         = (_live @() $false)
+        StorageCorroborators     = (_sig 0 $false)
+        SmartPredictiveFailures  = (_sig 0 $false)
+        Drives                   = @( (_drive 'Generic SSD' 'SSD' 500 'Healthy' $true) )
+        Volumes                  = @( (_vol 'C:' 200 465 $false) )
     }
 
     # blind-run: most CORE collectors unreadable (a locked-down / busy box where reads fail). The headline

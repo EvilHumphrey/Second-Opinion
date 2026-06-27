@@ -1134,6 +1134,64 @@ function Get-AppCrashEvents($since) {
     [pscustomobject]@{ Items = @($items); Readable = $readable }
 }
 
+function Get-EventNamedValue($eventData, [string[]]$Names) {
+    foreach ($n in $Names) {
+        if ($eventData.Named.ContainsKey($n)) { return [string]$eventData.Named[$n] }
+    }
+    return ''
+}
+
+function Get-DirtyShutdownSignals($since) {
+    $items = @()
+    $readable = $true
+
+    $sig6008 = Get-EventSignal 'System' 6008 'EventLog' $since
+    if (-not $sig6008.Readable) { $readable = $false }
+    foreach ($e in $sig6008.Items) {
+        $items += [pscustomobject]@{ Time = $e.TimeCreated; Source = 'EventLog 6008'; Code = 6008; Kind = 'unexpected-shutdown'; Detail = '' }
+    }
+
+    $sig27 = Get-EventSignal 'System' 27 'Microsoft-Windows-Kernel-Boot' $since
+    if (-not $sig27.Readable) { $readable = $false }
+    foreach ($e in $sig27.Items) {
+        $xd = Get-EventXmlData $e
+        $bootType = Get-EventNamedValue $xd @('BootType', 'Boot Type', 'param1')
+        $detail = ''
+        if ($bootType) { $detail = "BootType=$bootType" }
+        $items += [pscustomobject]@{ Time = $e.TimeCreated; Source = 'Kernel-Boot 27'; Code = 27; Kind = 'boot-type'; Detail = $detail }
+    }
+
+    $unexpected = @($items | Where-Object { $_.Kind -eq 'unexpected-shutdown' })
+    $boot = @($items | Where-Object { $_.Kind -eq 'boot-type' })
+    [pscustomobject]@{ Items = @($items); Count = @($items).Count; UnexpectedCount = @($unexpected).Count; BootCount = @($boot).Count; Readable = $readable }
+}
+
+function Get-LiveKernelEvents($since) {
+    $sig = Get-EventSignal 'Application' 1001 'Windows Error Reporting' $since
+    $items = @()
+    foreach ($e in $sig.Items) {
+        $xd = Get-EventXmlData $e
+        $eventName = Get-EventNamedValue $xd @('EventName', 'ProblemEventName')
+        $msg = [string]$e.Message
+        $isLive = ($eventName -eq 'LiveKernelEvent') -or ($msg -match '\bLiveKernelEvent\b')
+        if (-not $isLive) { continue }
+
+        $code = Get-EventNamedValue $xd @('P1', 'param1', 'Code')
+        if (-not ($code -match '\b(117|141|144)\b')) {
+            $m = [regex]::Match($msg, '(?im)^\s*(P1|Code)\s*:\s*(117|141|144)\b')
+            if ($m.Success) { $code = $m.Groups[2].Value }
+        }
+        if (-not ($code -match '\b(117|141|144)\b')) { continue }
+        $codeText = $matches[1]
+        $items += [pscustomobject]@{ Time = $e.TimeCreated; Source = 'WER 1001 LiveKernelEvent'; Code = $codeText }
+    }
+
+    $gpuCount = @($items | Where-Object { $_.Code -in '117', '141' }).Count
+    $usbCount = @($items | Where-Object { $_.Code -eq '144' }).Count
+    $codes = @($items | ForEach-Object { [string]$_.Code } | Sort-Object -Unique)
+    [pscustomobject]@{ Items = @($items); Count = @($items).Count; GpuCount = $gpuCount; UsbCount = $usbCount; Codes = @($codes); Readable = $sig.Readable }
+}
+
 function Get-TdrCount($since) {
     $sig = Get-EventSignal 'System' 4101 $null $since
     [pscustomobject]@{ Count = $sig.Count; Readable = $sig.Readable }
@@ -1180,6 +1238,20 @@ function Get-StorageEvents($since) {
     $sig = Get-EventSignal 'System' @(7, 11, 51, 153, 129) $null $since
     $items = @($sig.Items | Where-Object { $_.ProviderName -in 'disk', 'storahci', 'stornvme' })
     [pscustomobject]@{ Items = $items; Readable = $sig.Readable }
+}
+
+function Get-StorageCorroboratorEvents($since) {
+    $sig = Get-EventSignal 'System' @(55, 157) $null $since
+    $items = @($sig.Items | Where-Object {
+            (($_.Id -eq 55) -and ($_.ProviderName -in 'Ntfs', 'Microsoft-Windows-Ntfs')) -or
+            (($_.Id -eq 157) -and ($_.ProviderName -eq 'disk'))
+        })
+    [pscustomobject]@{ Items = @($items); Count = @($items).Count; Readable = $sig.Readable }
+}
+
+function Get-SmartPredictiveFailureEvents($since) {
+    $sig = Get-EventSignal 'System' 52 'disk' $since
+    [pscustomobject]@{ Items = @($sig.Items); Count = $sig.Count; Readable = $sig.Readable }
 }
 
 function Get-WheaCounts($since) {
@@ -1433,6 +1505,7 @@ function Get-ConfRank($c) { switch ($c) { 'High' { 0 } 'Medium' { 1 } 'Low' { 2 
 function New-Diagnosis($data) {
     $culprits = @(); $ruledOut = @(); $notes = @()
     $deepObserved = @()
+    $corroboratorObserved = @()
     $deepDumpBlocksClean = $false
 
     # Normalize the system-crash set. 1001 carries the WER bugcheck record; a BSOD can also raise a
@@ -1454,6 +1527,15 @@ function New-Diagnosis($data) {
     $codesPresent     = @($codeGroups | ForEach-Object { $_.Name })
     $unexplained      = @($data.Crashes | Where-Object { $_.Source -eq 'Kernel-Power 41' -and -not $_.BugcheckCode })
     $unexplainedCount = @($unexplained).Count
+
+    $dirtyShutdowns = $data.DirtyShutdowns
+    if (-not $dirtyShutdowns) { $dirtyShutdowns = [pscustomobject]@{ Items = @(); Count = 0; UnexpectedCount = 0; BootCount = 0; Readable = $true } }
+    $liveKernelEvents = $data.LiveKernelEvents
+    if (-not $liveKernelEvents) { $liveKernelEvents = [pscustomobject]@{ Items = @(); Count = 0; GpuCount = 0; UsbCount = 0; Codes = @(); Readable = $true } }
+    $storageCorroborators = $data.StorageCorroborators
+    if (-not $storageCorroborators) { $storageCorroborators = [pscustomobject]@{ Items = @(); Count = 0; Readable = $true } }
+    $smartPredictiveFailures = $data.SmartPredictiveFailures
+    if (-not $smartPredictiveFailures) { $smartPredictiveFailures = [pscustomobject]@{ Items = @(); Count = 0; Readable = $true } }
 
     # Consistency meta-rule (the core expert heuristic).
     if ($crashCount -ge 2) {
@@ -1531,7 +1613,8 @@ function New-Diagnosis($data) {
         $against = @()
         # Only claim drives/WHEA "look clean" when those reads actually SUCCEEDED - an empty drive list
         # or a 0 WHEA total also occur when the read FAILED, which would falsely reassure (verify-pass leak).
-        if ($data.DrivesReadable -and $data.Whea.Readable -and $badDrives.Count -eq 0 -and $data.Whea.Total -eq 0) { $against += 'Drive health and the hardware-error log look clean - this points at the driver/GPU rather than a failing drive or CPU underneath.' }
+        $driveEventLogsClean = ([bool]$storageCorroborators.Readable -and [int]$storageCorroborators.Count -eq 0 -and [bool]$smartPredictiveFailures.Readable -and [int]$smartPredictiveFailures.Count -eq 0)
+        if ($data.DrivesReadable -and $data.Whea.Readable -and $driveEventLogsClean -and $badDrives.Count -eq 0 -and $data.Whea.Total -eq 0) { $against += 'Drive health and the hardware-error log look clean - this points at the driver/GPU rather than a failing drive or CPU underneath.' }
         $tier = if ($conf -eq 'High') { 1 } else { 2 }
         $gpuModel = [string]$data.GpuModel
         $gpuTitle  = if ($gpuModel) { "GPU display driver ($gpuModel)" } else { 'GPU display driver' }
@@ -1758,6 +1841,62 @@ function New-Diagnosis($data) {
         }
     }
 
+    # Read-only corroborators: these are evidence-only signals. They can add a supporting For line to
+    # an already-ranked matching node, or else become Observed weak signals. They never create a
+    # culprit and never change tier/confidence.
+    if ($dirtyShutdowns.Readable -and [int]$dirtyShutdowns.UnexpectedCount -gt 0) {
+        $line = "Dirty shutdown markers: $([int]$dirtyShutdowns.UnexpectedCount) unexpected shutdown event(s) in the window - could be power loss, a hard reset, or a crash; corroborates instability when crashes are also present, but NOT a fault on its own. Corroborates only; it did not set or change any tier or confidence."
+        $matched = $false
+        foreach ($c in @($culprits)) {
+            if ($c.TierClass -in 'power', 'handoff') {
+                $c.For = @($c.For) + $line
+                $matched = $true
+            }
+        }
+        if (-not $matched) { $corroboratorObserved += $line }
+    }
+
+    if ($liveKernelEvents.Readable -and [int]$liveKernelEvents.Count -gt 0) {
+        $liveCodes = @($liveKernelEvents.Codes | Where-Object { $_ })
+        $codeText = ''
+        if ($liveCodes.Count -gt 0) { $codeText = " (code(s) $($liveCodes -join ', '))" }
+        $line = "LiveKernelEvent: $([int]$liveKernelEvents.Count) non-fatal hardware/driver hiccup report(s)$codeText seen. These are recovered events, not system crashes; they corroborate GPU/driver instability only when another ranked lead already exists. Corroborates only; it did not set or change any tier or confidence."
+        $matched = $false
+        foreach ($c in @($culprits)) {
+            $gpuCodeMatchesGpu = ([int]$liveKernelEvents.GpuCount -gt 0 -and $c.TierClass -eq 'gpu')
+            $driverCodeMatchesDriver = (([int]$liveKernelEvents.GpuCount -gt 0 -or [int]$liveKernelEvents.UsbCount -gt 0) -and $c.TierClass -eq 'driver')
+            if ($gpuCodeMatchesGpu -or $driverCodeMatchesDriver) {
+                $c.For = @($c.For) + $line
+                $matched = $true
+            }
+        }
+        if (-not $matched) { $corroboratorObserved += $line }
+    }
+
+    if ($storageCorroborators.Readable -and [int]$storageCorroborators.Count -gt 0) {
+        $line = "Storage/filesystem corroborator: $([int]$storageCorroborators.Count) Ntfs 55 / disk 157 event(s) seen (file-system corruption or surprise-removal/disk errors). This supports a drive/storage lead if one already exists; it is not a lone verdict. Corroborates only; it did not set or change any tier or confidence."
+        $matched = $false
+        foreach ($c in @($culprits)) {
+            if ($c.TierClass -eq 'drive' -or ($c.TierClass -eq 'storage' -and $c.Title -like 'Storage subsystem*')) {
+                $c.For = @($c.For) + $line
+                $matched = $true
+            }
+        }
+        if (-not $matched) { $corroboratorObserved += $line }
+    }
+
+    if ($smartPredictiveFailures.Readable -and [int]$smartPredictiveFailures.Count -gt 0) {
+        $line = "SMART predictive-failure event: $([int]$smartPredictiveFailures.Count) disk Event 52 event(s) logged; back up important data and verify with CrystalDiskInfo. This can be thermal or transient and is NOT a lone verdict. Corroborates only; it did not set or change any tier or confidence."
+        $matched = $false
+        foreach ($c in @($culprits)) {
+            if ($c.TierClass -eq 'drive' -or ($c.TierClass -eq 'storage' -and $c.Title -like 'Storage subsystem*')) {
+                $c.For = @($c.For) + $line
+                $matched = $true
+            }
+        }
+        if (-not $matched) { $corroboratorObserved += $line }
+    }
+
     # ---- Optional user-reported intake (deterministic). It NEVER changes a tier or confidence - it
     #      only adds evidence lines / notes and retargets confirm steps, so every guardrail still holds
     #      (the measured signals keep driving the ranking; self-reported symptoms inform the narrative).
@@ -1834,7 +1973,7 @@ function New-Diagnosis($data) {
     $drivesPresent = @($data.Drives)
     if (-not $data.DrivesReadable) {
         $notes += 'Drive health - the drive list could not be read this run (Get-PhysicalDisk failed); drives were NOT checked.'
-    } elseif ($drivesPresent.Count -gt 0 -and $badDrives.Count -eq 0) {
+    } elseif ($drivesPresent.Count -gt 0 -and $badDrives.Count -eq 0 -and [bool]$storageCorroborators.Readable -and [int]$storageCorroborators.Count -eq 0 -and [bool]$smartPredictiveFailures.Readable -and [int]$smartPredictiveFailures.Count -eq 0) {
         # A Healthy rollup with unreadable detailed SMART (the default non-elevated run) is NOT a clean
         # bill - say so as a neutral note, never a green "ruled out". (DESIGN guardrail #4.)
         $unreadable = @($drivesPresent | Where-Object { -not $_.ReliabilityReadable })
@@ -1879,6 +2018,14 @@ function New-Diagnosis($data) {
     if ($culpritUnreadable.Count -gt 0) {
         $notes += "Some culprit signals could not be read this run ($($culpritUnreadable -join '; ')) - a related culprit may be UNDER-reported, so the absence of one below is not proof it is clean. (These event reads can fail when a log is busy or access is limited.)"
     }
+    $corroboratorUnreadable = @()
+    if (-not $dirtyShutdowns.Readable)          { $corroboratorUnreadable += 'dirty-shutdown markers (EventLog 6008 / Kernel-Boot 27)' }
+    if (-not $liveKernelEvents.Readable)        { $corroboratorUnreadable += 'LiveKernelEvent reports (WER 1001)' }
+    if (-not $storageCorroborators.Readable)    { $corroboratorUnreadable += 'storage/filesystem corroborators (Ntfs 55 / disk 157)' }
+    if (-not $smartPredictiveFailures.Readable) { $corroboratorUnreadable += 'SMART predictive-failure events (disk 52)' }
+    if ($corroboratorUnreadable.Count -gt 0) {
+        $notes += "Some corroborator signals could not be read this run ($($corroboratorUnreadable -join '; ')) - related weak evidence may be UNDER-reported, so the absence of an Observed note below is not proof the window is clean."
+    }
 
     # Observed but below threshold (the "weak signals" channel): real, READABLE signals that are not
     # enough to rank as a culprit and are not clean either. Without this they vanish, and the absence of
@@ -1887,6 +2034,7 @@ function New-Diagnosis($data) {
     # "seen, not enough to conclude" lines, and any one of them suppresses the green clean banner.
     $observed = @()
     foreach ($do in @($deepObserved)) { $observed += $do }
+    foreach ($co in @($corroboratorObserved)) { $observed += $co }
     if ($data.Whea.Readable -and $data.Whea.Total -gt 0 -and $data.Whea.Fatal -eq 0 -and ($codesPresent -notcontains '0x124')) {
         $wc = if ($data.Whea.Corrected -gt 0) { $data.Whea.Corrected } else { $data.Whea.Total }
         $observed += "Hardware-error log (WHEA): $wc non-fatal/corrected event(s) seen. Not a fault on its own (often thermal, power, or a marginal RAM/XMP overclock), but the WHEA log is NOT clean. It escalates to a hardware suspect if the count keeps climbing or a fatal WHEA appears - re-test with any XMP/EXPO profile and overclock disabled."
@@ -1925,7 +2073,8 @@ function New-Diagnosis($data) {
     # signals. The "came back clean" banner shows ONLY when true, so an unreadable GPU/storage/etc. read
     # can no longer flash "all clean" when we simply could not look (Slice B residual completion).
     $allReadable = ([bool]$data.CrashesReadable -and [bool]$data.DrivesReadable -and [bool]$data.VolumesReadable -and [bool]$data.UpdatesReadable -and [bool]$data.DevicesReadable -and [bool]$data.Whea.Readable -and `
-            [bool]$data.TdrReadable -and [bool]$data.GpuVendorReadable -and [bool]$data.StorageReadable -and [bool]$data.DumpFailuresReadable -and [bool]$data.AppCrashesReadable -and [bool]$data.MemDiagReadable)
+            [bool]$data.TdrReadable -and [bool]$data.GpuVendorReadable -and [bool]$data.StorageReadable -and [bool]$data.DumpFailuresReadable -and [bool]$data.AppCrashesReadable -and [bool]$data.MemDiagReadable -and `
+            [bool]$dirtyShutdowns.Readable -and [bool]$liveKernelEvents.Readable -and [bool]$storageCorroborators.Readable -and [bool]$smartPredictiveFailures.Readable)
 
     # The green "came back clean" banner shows ONLY when every signal was readable AND there are no
     # culprits AND no observed weak signals - so corrected WHEA, sub-threshold storage, or update
@@ -1973,6 +2122,10 @@ function New-Diagnosis($data) {
         [pscustomobject]@{ Signal = 'Crash-dump write failures';    Readable = [bool]$data.DumpFailuresReadable }
         [pscustomobject]@{ Signal = 'Application crashes';          Readable = [bool]$data.AppCrashesReadable }
         [pscustomobject]@{ Signal = 'Memory-diagnostic results';    Readable = [bool]$data.MemDiagReadable }
+        [pscustomobject]@{ Signal = 'Dirty-shutdown markers';        Readable = [bool]$dirtyShutdowns.Readable }
+        [pscustomobject]@{ Signal = 'LiveKernelEvent reports';       Readable = [bool]$liveKernelEvents.Readable }
+        [pscustomobject]@{ Signal = 'Storage/filesystem corroborators'; Readable = [bool]$storageCorroborators.Readable }
+        [pscustomobject]@{ Signal = 'SMART predictive-failure events';  Readable = [bool]$smartPredictiveFailures.Readable }
     )
 
     # Trend snapshot: comparison-only evidence exported for -Baseline / redacted-evidence.json. This is
@@ -3061,6 +3214,10 @@ $tdrSig   = Get-TdrCount $since
 $gpuVSig  = Get-GpuVendorEvents $since
 $dumpSig  = Get-DumpFailureCount $since
 $stSig    = Get-StorageEvents $since
+$dirtySig = Get-DirtyShutdownSignals $since
+$liveSig  = Get-LiveKernelEvents $since
+$stCorSig = Get-StorageCorroboratorEvents $since
+$smart52Sig = Get-SmartPredictiveFailureEvents $since
 $memSig   = Get-MemDiagFailed $since
 $script:LastDrives = $driveSig.Items
 $data = [pscustomobject]@{
@@ -3077,6 +3234,10 @@ $data = [pscustomobject]@{
     DumpConfig           = Get-DumpConfig
     StorageEvents        = $stSig.Items
     StorageReadable      = $stSig.Readable
+    DirtyShutdowns       = $dirtySig
+    LiveKernelEvents     = $liveSig
+    StorageCorroborators = $stCorSig
+    SmartPredictiveFailures = $smart52Sig
     Whea                 = Get-WheaCounts $since
     UpdateFailures       = $updSig.Count
     UpdatesReadable      = $updSig.Readable

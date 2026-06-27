@@ -1,0 +1,6 @@
+counts crashes=0 distinct=0 unexplained=0 appcrash=0
+observed | Storage/filesystem corroborator: 2 Ntfs 55 / disk 157 event(s) seen (file-system corruption or surprise-removal/disk errors). This supports a drive/storage lead if one already exists; it is not a lone verdict. Corroborates only; it did not set or change any tier or confidence.
+ruled | Disk space - no volume is critically low.
+ruled | Windows Update - no recent update failures.
+ruled | Devices - no problem devices in Device Manager.
+ruled | Hardware-error log (WHEA) - clean.
