@@ -18,3 +18,57 @@ jobs:
       - name: Fixture harness (Windows PowerShell 5.1)
         shell: powershell
         run: powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\Run-Fixtures.ps1
+
+      # Keep the README's advertised trust metric from silently drifting away from the real gate. This
+      # runs the harness, reads the counts it actually enforces, reads the counts the README claims, and
+      # fails the build if they disagree (or if either is unparseable - fail loud, never silently pass).
+      - name: README trust metric matches the gate
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          # Run the harness (child process: its `exit` sets $LASTEXITCODE without ending this step) and
+          # capture everything it prints, including the Write-Host summary line.
+          $raw = (& pwsh -File .\tests\Run-Fixtures.ps1 2>&1 | Out-String)
+          $gateExit = $LASTEXITCODE
+          Write-Host $raw
+          if ($gateExit -ne 0) {
+            Write-Host "::error::Fixture harness exited $gateExit - the gate is not green, so its counts are untrustworthy."
+            exit 1
+          }
+
+          # Parse the harness final line: "Snapshots: A passed, B failed | Guardrails: C ok, D violated".
+          $clean = $raw -replace "`e\[[0-9;]*m", ''   # strip any ANSI colour codes
+          $g = [regex]::Match($clean, 'Snapshots:\s*(\d+)\s+passed,\s*(\d+)\s+failed\s*\|\s*Guardrails:\s*(\d+)\s+ok,\s*(\d+)\s+violated')
+          if (-not $g.Success) {
+            Write-Host "::error::Could not find the harness summary line in the output. If its format changed, update this check (.github/workflows/tests.yml)."
+            exit 1
+          }
+          $gateSnapshots  = [int]$g.Groups[1].Value + [int]$g.Groups[2].Value   # passed + failed = fixtures
+          $gateGuardrails = [int]$g.Groups[3].Value + [int]$g.Groups[4].Value   # ok + violated   = assertions
+
+          # Parse the README trust metric. Whitespace is normalised first so the prose line-wrap
+          # ("... 42 snapshot fixtures plus 165 guardrail / assertions ...") cannot hide the phrase.
+          $readme = (Get-Content -Raw .\README.md) -replace '\s+', ' '
+          $r = [regex]::Match($readme, '(\d+)\s+snapshot fixtures plus\s+(\d+)\s+guardrail assertions')
+          if (-not $r.Success) {
+            Write-Host "::error::Could not find 'N snapshot fixtures plus M guardrail assertions' in README.md. If you reworded the trust metric, update this check."
+            exit 1
+          }
+          $readmeSnapshots  = [int]$r.Groups[1].Value
+          $readmeGuardrails = [int]$r.Groups[2].Value
+
+          Write-Host "Gate   : $gateSnapshots snapshot fixtures, $gateGuardrails guardrail assertions"
+          Write-Host "README : $readmeSnapshots snapshot fixtures, $readmeGuardrails guardrail assertions"
+
+          $bad = $false
+          if ($readmeSnapshots -ne $gateSnapshots) {
+            Write-Host "::error::README states $readmeSnapshots snapshot fixtures but the harness runs $gateSnapshots. Update the trust metric in README.md."
+            $bad = $true
+          }
+          if ($readmeGuardrails -ne $gateGuardrails) {
+            Write-Host "::error::README states $readmeGuardrails guardrail assertions but the harness runs $gateGuardrails. Update the trust metric in README.md."
+            $bad = $true
+          }
+          if ($bad) { exit 1 }
+          Write-Host "OK: README trust metric matches the gate ($gateSnapshots snapshot fixtures / $gateGuardrails guardrail assertions)."
