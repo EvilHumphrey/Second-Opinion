@@ -367,6 +367,84 @@ foreach ($pc in $packetChecks) {
     else { Write-Host "VIOLATED  $($pc.N)" -ForegroundColor Red; $afail++ }
 }
 
+# ---- Baseline diff guardrails (Slice 4): -Baseline is opt-in narration only. It compares a parsed
+#      redacted-evidence.json against the current diagnosis snapshot, never feeds New-Diagnosis, never
+#      changes tier/confidence, and never lets missing/stale baselines read as "clean" or "no change".
+$baselineSys = [pscustomobject]@{
+    ComputerName = 'BASELINE-PC'; UserName = 'baseuser'; OS = 'Windows 11'; OSBuild = '26100'
+    Manufacturer = 'ACME'; Model = 'OldBox'; CPU = 'CPU'; RAMGB = 16; BiosSerial = 'BASE-SN'
+    LastBoot = $null; UptimeText = '0d 0h'; Gpu = 'GPU'; RamModules = 1; RamSpeed = 0; XmpActive = $false; IsElevated = $false
+}
+$baselineDiag = New-Diagnosis (_data @{
+    Crashes    = @( (_crash -30 'BugCheck 1001' '0x116') )
+    TdrCount   = 1
+    DumpConfig = (_dumpcfg 3 0)
+    Drives     = @( (_drive 'Generic SSD' 'SSD' 500 'Healthy' $true) )
+    Volumes    = @( (_vol 'C:' 220 465 $false) )
+})
+$currentDiffDiag = New-Diagnosis (_data @{
+    Crashes        = @( (_crash -30 'BugCheck 1001' '0x116'), (_crash 0 'BugCheck 1001' '0x116') )
+    TdrCount       = 2
+    Whea           = (_whea 0 1 1)
+    UpdateFailures = 1
+    DumpConfig     = (_dumpcfg 0 1)
+    Drives         = @( (_drive 'Generic SSD' 'SSD' 500 'Healthy' $true) )
+    Volumes        = @( (_vol 'C:' 150 465 $false) )
+})
+$baselineEvidence = New-SoEvidenceObject $baselineSys $baselineDiag $packetStamp
+$currentEvidence = New-SoEvidenceObject $redSys $currentDiffDiag $packetStamp
+$currentDiffDiag | Add-Member -NotePropertyName EvidenceSnapshot -NotePropertyValue $currentEvidence -Force
+$diffBeforeFingerprint = Get-Fingerprint $currentDiffDiag
+$baselineDiff = Compare-SoEvidence $baselineEvidence $currentDiffDiag
+$diffAfterFingerprint = Get-Fingerprint $currentDiffDiag
+$baselineDiffText = ((Get-SoBaselineDiffLines $baselineDiff) -join "`n")
+
+$readableBaseline = New-Diagnosis (_data @{ Drives = @( (_drive 'Generic SSD' 'SSD' 500 'Healthy' $true) ); Volumes = @( (_vol 'C:' 200 465 $false) ) })
+$readableEvidence = New-SoEvidenceObject $probeSys $readableBaseline $packetStamp
+$unreadableCurrent = New-Diagnosis (_data @{ CrashesReadable = $false; Drives = @( (_drive 'Generic SSD' 'SSD' 500 'Healthy' $true) ); Volumes = @( (_vol 'C:' 200 465 $false) ) })
+$unreadableCurrent | Add-Member -NotePropertyName EvidenceSnapshot -NotePropertyValue (New-SoEvidenceObject $probeSys $unreadableCurrent $packetStamp) -Force
+$readabilityDiff = Compare-SoEvidence $readableEvidence $unreadableCurrent
+$readabilityDiffText = ((Get-SoBaselineDiffLines $readabilityDiff) -join "`n")
+
+$missingLoad = Read-SoBaselineEvidence (Join-Path $env:TEMP ("second-opinion-missing-baseline-{0}.json" -f ([guid]::NewGuid().ToString('N'))))
+$missingDiff = New-SoBaselineDiffAbstention $missingLoad.Reason
+$missingDiffText = ((Get-SoBaselineDiffLines $missingDiff) -join "`n")
+$oldSchemaDiff = Compare-SoEvidence ([pscustomobject]@{ SchemaVersion = '0.9' }) $currentDiffDiag
+$oldSchemaDiffText = ((Get-SoBaselineDiffLines $oldSchemaDiff) -join "`n")
+$oldStamp = [pscustomobject]@{ ToolVersion = '0.1.0'; KbHash = 'OLD-KB'; GitSha = 'old' }
+$versionDiff = Compare-SoEvidence (New-SoEvidenceObject $baselineSys $baselineDiag $oldStamp) $currentDiffDiag
+$versionDiffText = ((Get-SoBaselineDiffLines $versionDiff) -join "`n")
+
+$manualRedactedDiff = [pscustomobject]@{
+    Usable = $true
+    Status = 'compared'
+    Lines = @('New observed weak signal: DESKTOP-RED01 redacted_user SN-REDACT-77 00:1A:2B:3C:4D:5E 192.168.1.42 fe80::abcd%12')
+}
+$currentDiffDiag | Add-Member -NotePropertyName BaselineDiff -NotePropertyValue $manualRedactedDiff -Force
+$diffPrompt = Build-AiPrompt $redSys $currentDiffDiag $redMap $true
+$diffHtml = Render-Html $redSys $currentDiffDiag
+$diffPacket = New-HelperPacketArtifacts $redSys $currentDiffDiag $redMap $packetStamp
+$diffChecks = @(
+    @{ N = 'baseline-diff: Compare-SoEvidence reports a new crash-count delta'; C = { $baselineDiffText -match 'System crash count increased from 1 to 2' } }
+    @{ N = 'baseline-diff: Compare-SoEvidence reports OS build, dump-policy, and system-drive free-space deltas'; C = { ($baselineDiffText -match 'OS build changed from 26100 to 26200') -and ($baselineDiffText -match 'CrashDumpEnabled moved from 3 to 0') -and ($baselineDiffText -match 'System-drive free space changed') } }
+    @{ N = 'baseline-diff: comparison never mutates the current diagnosis fingerprint'; C = { $diffBeforeFingerprint -eq $diffAfterFingerprint } }
+    @{ N = 'baseline-diff: missing baseline yields no usable baseline, not a clean/no-change comparison'; C = { ($missingDiff.Status -eq 'no-usable-baseline') -and ($missingDiffText -match 'No usable baseline') -and ($missingDiffText -match 'NOT a clean comparison') -and ($missingDiffText -notmatch 'No tracked deltas') } }
+    @{ N = 'baseline-diff: old SchemaVersion yields no usable baseline, not a clean/no-change comparison'; C = { ($oldSchemaDiff.Status -eq 'no-usable-baseline') -and ($oldSchemaDiffText -match 'No usable baseline') -and ($oldSchemaDiffText -match 'SchemaVersion') -and ($oldSchemaDiffText -notmatch 'No tracked deltas') } }
+    @{ N = 'baseline-diff: readable-to-unreadable transition is flagged'; C = { $readabilityDiffText -match 'Readability regression: Crash / bugcheck history was readable in the baseline but NOT readable now' } }
+    @{ N = 'baseline-diff: ToolVersion/KbHash mismatch still diffs but notes definitional risk'; C = { ($versionDiff.Status -eq 'compared') -and ($versionDiffText -match 'Version note') -and ($versionDiffText -match 'definitional') } }
+    @{ N = 'baseline-diff: AI prompt carries the notes-only baseline section'; C = { $diffPrompt -match 'WHAT CHANGED SINCE THE BASELINE' } }
+    @{ N = 'baseline-diff: report.html carries the baseline section'; C = { $diffHtml -match 'What changed since the baseline' } }
+    @{ N = 'baseline-diff: helper packet emits baseline-diff.md only when a diff exists'; C = { [bool]$diffPacket['baseline-diff.md'] } }
+    @{ N = 'baseline-diff: AI prompt redacts identifiers inside baseline diff notes'; C = { ($diffPrompt -notmatch 'DESKTOP-RED01|redacted_user|SN-REDACT-77|00:1A:2B:3C:4D:5E|192\.168\.1\.42|fe80::abcd') -and ($diffPrompt -match '\[HOST_1\]') -and ($diffPrompt -match '\[MAC\]') -and ($diffPrompt -match '\[IP\]') -and ($diffPrompt -match '\[IPV6\]') } }
+    @{ N = 'baseline-diff: packet baseline-diff.md redacts identifiers'; C = { ($diffPacket['baseline-diff.md'] -notmatch 'DESKTOP-RED01|redacted_user|SN-REDACT-77|00:1A:2B:3C:4D:5E|192\.168\.1\.42|fe80::abcd') -and ($diffPacket['baseline-diff.md'] -match '\[HOST_1\]') -and ($diffPacket['baseline-diff.md'] -match '\[MAC\]') -and ($diffPacket['baseline-diff.md'] -match '\[IP\]') -and ($diffPacket['baseline-diff.md'] -match '\[IPV6\]') } }
+)
+foreach ($dc in $diffChecks) {
+    $ok = $false
+    try { $ok = [bool](& $dc.C) } catch { $ok = $false }
+    if ($ok) { Write-Host "OK        $($dc.N)" -ForegroundColor Green; $apass++ }
+    else { Write-Host "VIOLATED  $($dc.N)" -ForegroundColor Red; $afail++ }
+}
+
 # ---- Prompt-injection / output-safety guardrails (Codex security review): untrusted machine strings
 #      (device / app / GPU names) must be (a) HTML-encoded in report.html and (b) FLATTENED to inert data in
 #      ai-prompt.txt so a malicious value cannot forge a new prompt line/section or smuggle an instruction.

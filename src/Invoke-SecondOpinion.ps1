@@ -21,7 +21,8 @@ param(
     [switch]$NoRedact,
     [switch]$NoIntake,
     [switch]$DeepDump,
-    [switch]$HelperPacket
+    [switch]$HelperPacket,
+    [string]$Baseline
 )
 
 $ErrorActionPreference = 'Continue'
@@ -1963,6 +1964,53 @@ function New-Diagnosis($data) {
         [pscustomobject]@{ Signal = 'Memory-diagnostic results';    Readable = [bool]$data.MemDiagReadable }
     )
 
+    # Trend snapshot: comparison-only evidence exported for -Baseline / redacted-evidence.json. This is
+    # intentionally computed AFTER scoring and never feeds a culprit rule, tier, confidence, or ordering.
+    $gpuVendorCount = 0
+    if ($data.GpuVendorEvents) { $gpuVendorCount = [int]$data.GpuVendorEvents.Count }
+    $dumpPolicy = [pscustomobject]@{ CrashDumpEnabled = $null; AutoReboot = $null; Readable = $false }
+    if ($data.DumpConfig) {
+        $dumpPolicy = [pscustomobject]@{
+            CrashDumpEnabled = $data.DumpConfig.CrashDumpEnabled
+            AutoReboot       = $data.DumpConfig.AutoReboot
+            Readable         = [bool]$data.DumpConfig.Readable
+        }
+    }
+    $trendSystemDrive = if ($data.SystemDrive) { [string]$data.SystemDrive } else { 'C:' }
+    $systemDriveFree = [pscustomobject]@{ Drive = $trendSystemDrive; FreeGB = $null; SizeGB = $null; FreePct = $null; Readable = [bool]$data.VolumesReadable }
+    foreach ($v in @($data.Volumes)) {
+        if ($v.Drive -eq $trendSystemDrive) {
+            $systemDriveFree = [pscustomobject]@{
+                Drive    = [string]$v.Drive
+                FreeGB   = $v.FreeGB
+                SizeGB   = $v.SizeGB
+                FreePct  = $v.FreePct
+                Readable = [bool]$data.VolumesReadable
+            }
+            break
+        }
+    }
+    $trend = [pscustomobject]@{
+        Whea = [pscustomobject]@{
+            Fatal     = [int]$data.Whea.Fatal
+            Corrected = [int]$data.Whea.Corrected
+            Total     = [int]$data.Whea.Total
+            Readable  = [bool]$data.Whea.Readable
+        }
+        Tdr = [pscustomobject]@{
+            Count                = [int]$data.TdrCount
+            Readable             = [bool]$data.TdrReadable
+            GpuVendorEventCount  = $gpuVendorCount
+            GpuVendorReadable    = [bool]$data.GpuVendorReadable
+        }
+        DumpFailures = [pscustomobject]@{
+            Count    = [int]$data.DumpFailures
+            Readable = [bool]$data.DumpFailuresReadable
+        }
+        DumpPolicy = $dumpPolicy
+        SystemDriveFree = $systemDriveFree
+    }
+
     [pscustomobject]@{
         Culprits         = $culprits
         RuledOut         = $ruledOut
@@ -1979,6 +2027,7 @@ function New-Diagnosis($data) {
         Headline         = $headline
         BlindRun         = $blindRun
         Readability      = $readability
+        Trend            = $trend
         Intake           = $data.Intake
         DeepDump         = $data.DeepDump
     }
@@ -2051,6 +2100,14 @@ function Build-AiPrompt($sys, $diag, $map, $redact) {
     if ($diag.Headline) {
         [void]$sb.AppendLine('=== BOTTOM LINE (deterministic - the scorer''s one-line verdict; explain and pressure-test it, do not overturn it silently) ===')
         [void]$sb.AppendLine($(Protect-PromptValue $diag.Headline.Text))
+        [void]$sb.AppendLine('')
+    }
+    $baselineDiff = Get-SoBaselineDiff $diag
+    if ($baselineDiff) {
+        [void]$sb.AppendLine('=== WHAT CHANGED SINCE THE BASELINE (notes only - do NOT rank, promote, demote, or change confidence) ===')
+        foreach ($line in (Get-SoBaselineDiffLines $baselineDiff)) {
+            [void]$sb.AppendLine(" - $(Protect-PromptValue $line)")
+        }
         [void]$sb.AppendLine('')
     }
     $intakeLines = Format-IntakeLines $diag.Intake
@@ -2166,6 +2223,43 @@ function Get-PacketDoNotDoYet($c) {
     }
 }
 
+function Get-SoPathValue($obj, [string[]]$Path, $Default = $null) {
+    $v = $obj
+    foreach ($p in @($Path)) {
+        if ($null -eq $v) { return $Default }
+        if ($v -is [System.Collections.IDictionary]) {
+            if ($v.Contains($p)) { $v = $v[$p]; continue }
+            return $Default
+        }
+        $prop = $v.PSObject.Properties[$p]
+        if (-not $prop) { return $Default }
+        $v = $prop.Value
+    }
+    if ($null -eq $v) { return $Default }
+    return $v
+}
+
+function ConvertTo-SoInt($value, $Default = $null) {
+    if ($null -eq $value) { return $Default }
+    if ([string]::IsNullOrWhiteSpace([string]$value)) { return $Default }
+    try { return [int]$value } catch { return $Default }
+}
+
+function ConvertTo-SoBool($value) {
+    if ($value -is [bool]) { return [bool]$value }
+    return ([string]$value) -eq 'True'
+}
+
+function ConvertTo-SoStringSet($values) {
+    $items = @()
+    foreach ($v in @($values)) {
+        if ($null -ne $v -and -not [string]::IsNullOrWhiteSpace([string]$v)) {
+            $items += [string]$v
+        }
+    }
+    return $items
+}
+
 function Build-HelperSummary($sys, $diag, $stamp) {
     $sb = New-Object System.Text.StringBuilder
     [void]$sb.AppendLine('# Second Opinion helper summary')
@@ -2243,10 +2337,10 @@ function Build-HelperSummary($sys, $diag, $stamp) {
     return $sb.ToString()
 }
 
-function Build-RedactedEvidenceJson($sys, $diag, $stamp) {
+function New-SoEvidenceObject($sys, $diag, $stamp) {
     $culprits = @()
     foreach ($c in @($diag.Culprits)) {
-        $culprits += [ordered]@{
+        $culprits += [pscustomobject][ordered]@{
             Title      = [string]$c.Title
             TierClass  = [string]$c.TierClass
             Tier       = $c.Tier
@@ -2259,24 +2353,68 @@ function Build-RedactedEvidenceJson($sys, $diag, $stamp) {
     }
     $readability = @()
     foreach ($r in @($diag.Readability)) {
-        $readability += [ordered]@{
+        $readability += [pscustomobject][ordered]@{
             Signal   = [string]$r.Signal
             Readable = [bool]$r.Readable
         }
     }
+    $bugcheckGroups = @()
+    foreach ($g in @($diag.BugcheckGroups)) {
+        $bugcheckGroups += [pscustomobject][ordered]@{
+            Code  = [string]$g.Name
+            Count = [int]$g.Count
+        }
+    }
+    $headlineSeverity = ''
+    $headlineText = ''
+    if ($diag.Headline) {
+        $headlineSeverity = [string]$diag.Headline.Severity
+        $headlineText = [string]$diag.Headline.Text
+    }
+    $trend = Get-SoPathValue $diag @('Trend') $null
+    $trendEvidence = [ordered]@{
+        Whea = [ordered]@{
+            Fatal     = ConvertTo-SoInt (Get-SoPathValue $trend @('Whea', 'Fatal')) 0
+            Corrected = ConvertTo-SoInt (Get-SoPathValue $trend @('Whea', 'Corrected')) 0
+            Total     = ConvertTo-SoInt (Get-SoPathValue $trend @('Whea', 'Total')) 0
+            Readable  = ConvertTo-SoBool (Get-SoPathValue $trend @('Whea', 'Readable') $false)
+        }
+        Tdr = [ordered]@{
+            Count               = ConvertTo-SoInt (Get-SoPathValue $trend @('Tdr', 'Count')) 0
+            Readable            = ConvertTo-SoBool (Get-SoPathValue $trend @('Tdr', 'Readable') $false)
+            GpuVendorEventCount = ConvertTo-SoInt (Get-SoPathValue $trend @('Tdr', 'GpuVendorEventCount')) 0
+            GpuVendorReadable   = ConvertTo-SoBool (Get-SoPathValue $trend @('Tdr', 'GpuVendorReadable') $false)
+        }
+        DumpFailures = [ordered]@{
+            Count    = ConvertTo-SoInt (Get-SoPathValue $trend @('DumpFailures', 'Count')) 0
+            Readable = ConvertTo-SoBool (Get-SoPathValue $trend @('DumpFailures', 'Readable') $false)
+        }
+        DumpPolicy = [ordered]@{
+            CrashDumpEnabled = Get-SoPathValue $trend @('DumpPolicy', 'CrashDumpEnabled') $null
+            AutoReboot       = Get-SoPathValue $trend @('DumpPolicy', 'AutoReboot') $null
+            Readable         = ConvertTo-SoBool (Get-SoPathValue $trend @('DumpPolicy', 'Readable') $false)
+        }
+        SystemDriveFree = [ordered]@{
+            Drive    = [string](Get-SoPathValue $trend @('SystemDriveFree', 'Drive') '')
+            FreeGB   = Get-SoPathValue $trend @('SystemDriveFree', 'FreeGB') $null
+            SizeGB   = Get-SoPathValue $trend @('SystemDriveFree', 'SizeGB') $null
+            FreePct  = Get-SoPathValue $trend @('SystemDriveFree', 'FreePct') $null
+            Readable = ConvertTo-SoBool (Get-SoPathValue $trend @('SystemDriveFree', 'Readable') $false)
+        }
+    }
     $evidence = [ordered]@{
         SchemaVersion = '1.0'
-        VersionStamp  = [ordered]@{
+        VersionStamp  = [pscustomobject][ordered]@{
             ToolVersion = [string]$stamp.ToolVersion
             KbHash      = [string]$stamp.KbHash
             GitSha      = [string]$stamp.GitSha
         }
-        CaseIdentifiers = [ordered]@{
+        CaseIdentifiers = [pscustomobject][ordered]@{
             ComputerName = [string]$sys.ComputerName
             UserName     = [string]$sys.UserName
             BiosSerial   = [string]$sys.BiosSerial
         }
-        System = [ordered]@{
+        System = [pscustomobject][ordered]@{
             OS           = [string]$sys.OS
             OSBuild      = [string]$sys.OSBuild
             Manufacturer = [string]$sys.Manufacturer
@@ -2286,11 +2424,11 @@ function Build-RedactedEvidenceJson($sys, $diag, $stamp) {
             RAMGB        = [int]$sys.RAMGB
             IsElevated   = [bool]$sys.IsElevated
         }
-        Headline = [ordered]@{
-            Severity = if ($diag.Headline) { [string]$diag.Headline.Severity } else { '' }
-            Text     = if ($diag.Headline) { [string]$diag.Headline.Text } else { '' }
+        Headline = [pscustomobject][ordered]@{
+            Severity = $headlineSeverity
+            Text     = $headlineText
         }
-        Counts = [ordered]@{
+        Counts = [pscustomobject][ordered]@{
             CrashCount       = [int]$diag.CrashCount
             DistinctCodes    = [int]$diag.DistinctCodes
             UnexplainedCount = [int]$diag.UnexplainedCount
@@ -2298,12 +2436,286 @@ function Build-RedactedEvidenceJson($sys, $diag, $stamp) {
             AllReadable      = [bool]$diag.AllReadable
             BlindRun         = [bool]$diag.BlindRun
         }
-        Culprits    = @($culprits)
-        RuledOut    = @($diag.RuledOut)
-        Observed    = @($diag.Observed)
-        Readability = @($readability)
+        BugcheckGroups = @($bugcheckGroups)
+        Trend          = [pscustomobject]$trendEvidence
+        Culprits       = @($culprits)
+        RuledOut       = @($diag.RuledOut)
+        Observed       = @($diag.Observed)
+        Readability    = @($readability)
     }
+    return [pscustomobject]$evidence
+}
+
+function Build-RedactedEvidenceJson($sys, $diag, $stamp) {
+    $evidence = New-SoEvidenceObject $sys $diag $stamp
     return ($evidence | ConvertTo-Json -Depth 8)
+}
+
+function Get-SoEvidenceForDiff($diag) {
+    $snap = Get-SoPathValue $diag @('EvidenceSnapshot') $null
+    if ($snap) { return $snap }
+    $fallbackSys = [pscustomobject]@{
+        ComputerName = ''
+        UserName     = ''
+        BiosSerial   = ''
+        OS           = ''
+        OSBuild      = ''
+        Manufacturer = ''
+        Model        = ''
+        CPU          = ''
+        GPU          = ''
+        RAMGB        = 0
+        IsElevated   = $false
+    }
+    $fallbackStamp = [pscustomobject]@{ ToolVersion = ''; KbHash = ''; GitSha = '' }
+    return (New-SoEvidenceObject $fallbackSys $diag $fallbackStamp)
+}
+
+function New-SoBaselineDiffAbstention($reason) {
+    if ([string]::IsNullOrWhiteSpace([string]$reason)) { $reason = 'baseline could not be loaded.' }
+    [pscustomobject]@{
+        Usable = $false
+        Status = 'no-usable-baseline'
+        Lines  = @("No usable baseline (this is NOT a clean comparison): $reason")
+    }
+}
+
+function Get-SoBaselineDiff($diag) {
+    return (Get-SoPathValue $diag @('BaselineDiff') $null)
+}
+
+function Get-SoBaselineDiffLines($diff) {
+    if (-not $diff) { return @() }
+    $lines = Get-SoPathValue $diff @('Lines') @()
+    return @($lines)
+}
+
+function New-SoNumericDelta($Label, $BaseValue, $CurrentValue, $IncreaseNote, $DecreaseNote) {
+    $b = ConvertTo-SoInt $BaseValue $null
+    $c = ConvertTo-SoInt $CurrentValue $null
+    if ($null -eq $b -or $null -eq $c) {
+        return [pscustomobject]@{ Available = $false; Changed = $false; Line = $null }
+    }
+    if ($b -eq $c) {
+        return [pscustomobject]@{ Available = $true; Changed = $false; Line = $null }
+    }
+    $delta = $c - $b
+    $sign = ''
+    if ($delta -gt 0) { $sign = '+' }
+    $verb = if ($delta -gt 0) { 'increased' } else { 'decreased' }
+    $note = if ($delta -gt 0) { $IncreaseNote } else { $DecreaseNote }
+    return [pscustomobject]@{
+        Available = $true
+        Changed   = $true
+        Line      = "$Label $verb from $b to $c ($sign$delta) - $note."
+    }
+}
+
+function Get-SoTopHypothesis($evidence) {
+    $culprits = @((Get-SoPathValue $evidence @('Culprits') @()))
+    if (@($culprits).Count -eq 0) {
+        return [pscustomobject]@{ Present = $false; Title = ''; Tier = ''; Confidence = ''; Display = 'none' }
+    }
+    $c = $culprits[0]
+    $title = [string](Get-SoPathValue $c @('Title') '')
+    $tier = [string](Get-SoPathValue $c @('Tier') '')
+    $confidence = [string](Get-SoPathValue $c @('Confidence') '')
+    [pscustomobject]@{
+        Present    = $true
+        Title      = $title
+        Tier       = $tier
+        Confidence = $confidence
+        Display    = "$title [tier $tier / $confidence]"
+    }
+}
+
+function Compare-SoEvidence($baselineObj, $diag) {
+    if (-not $baselineObj) {
+        return (New-SoBaselineDiffAbstention 'baseline JSON was not available.')
+    }
+    $schema = [string](Get-SoPathValue $baselineObj @('SchemaVersion') '')
+    if ($schema -ne '1.0') {
+        if ([string]::IsNullOrWhiteSpace($schema)) { $schema = 'missing' }
+        return (New-SoBaselineDiffAbstention "baseline SchemaVersion '$schema' is not supported; expected 1.0.")
+    }
+
+    $current = Get-SoEvidenceForDiff $diag
+    $lines = @()
+    $unavailable = @()
+    $changed = $false
+
+    $baseTool = [string](Get-SoPathValue $baselineObj @('VersionStamp', 'ToolVersion') '')
+    $baseKb = [string](Get-SoPathValue $baselineObj @('VersionStamp', 'KbHash') '')
+    $curTool = [string](Get-SoPathValue $current @('VersionStamp', 'ToolVersion') '')
+    $curKb = [string](Get-SoPathValue $current @('VersionStamp', 'KbHash') '')
+    $versionMismatch = $false
+    if (($baseTool -and $curTool -and $baseTool -ne $curTool) -or ($baseKb -and $curKb -and $baseKb -ne $curKb)) {
+        $versionMismatch = $true
+        $lines += 'Version note: the baseline ToolVersion or KbHash differs from this run. The diff still runs, but tool/KB changes can make some deltas definitional rather than real.'
+    }
+
+    $numericChecks = @(
+        @{ Label = 'System crash count';         Path = @('Counts', 'CrashCount');       Up = 'new crash volume appeared since the baseline'; Down = 'crash volume resolved or aged out since the baseline' }
+        @{ Label = 'Distinct stop-code count';   Path = @('Counts', 'DistinctCodes');    Up = 'new stop-code variety appeared since the baseline'; Down = 'stop-code variety narrowed or aged out since the baseline' }
+        @{ Label = 'WHEA total event count';     Path = @('Trend', 'Whea', 'Total');     Up = 'new hardware-error log activity appeared since the baseline'; Down = 'hardware-error log activity dropped since the baseline' }
+        @{ Label = 'WHEA fatal event count';     Path = @('Trend', 'Whea', 'Fatal');     Up = 'new fatal WHEA activity appeared since the baseline'; Down = 'fatal WHEA activity dropped since the baseline' }
+        @{ Label = 'WHEA corrected event count'; Path = @('Trend', 'Whea', 'Corrected'); Up = 'new corrected WHEA activity appeared since the baseline'; Down = 'corrected WHEA activity dropped since the baseline' }
+        @{ Label = 'TDR count';                  Path = @('Trend', 'Tdr', 'Count');      Up = 'new display-driver timeout activity appeared since the baseline'; Down = 'display-driver timeout activity dropped since the baseline' }
+        @{ Label = 'Application crash count';    Path = @('Counts', 'AppCrashCount');    Up = 'new app-crash volume appeared since the baseline'; Down = 'app-crash volume resolved or aged out since the baseline' }
+        @{ Label = 'Unexplained restart count';  Path = @('Counts', 'UnexplainedCount'); Up = 'new dump-less restart volume appeared since the baseline'; Down = 'dump-less restart volume resolved or aged out since the baseline' }
+    )
+    foreach ($n in $numericChecks) {
+        $d = New-SoNumericDelta $n.Label (Get-SoPathValue $baselineObj $n.Path $null) (Get-SoPathValue $current $n.Path $null) $n.Up $n.Down
+        if (-not $d.Available) {
+            $unavailable += $n.Label
+        } elseif ($d.Changed) {
+            $lines += $d.Line
+            $changed = $true
+        }
+    }
+
+    $baseBuild = [string](Get-SoPathValue $baselineObj @('System', 'OSBuild') '')
+    $curBuild = [string](Get-SoPathValue $current @('System', 'OSBuild') '')
+    if ($baseBuild -and $curBuild) {
+        if ($baseBuild -ne $curBuild) {
+            $lines += "OS build changed from $baseBuild to $curBuild."
+            $changed = $true
+        }
+    } else { $unavailable += 'OS build' }
+
+    $baseDump = Get-SoPathValue $baselineObj @('Trend', 'DumpPolicy', 'CrashDumpEnabled') $null
+    $curDump = Get-SoPathValue $current @('Trend', 'DumpPolicy', 'CrashDumpEnabled') $null
+    if ($null -ne $baseDump -and $null -ne $curDump) {
+        if ([string]$baseDump -ne [string]$curDump) {
+            $lines += "Dump policy changed: CrashDumpEnabled moved from $baseDump to $curDump."
+            $changed = $true
+        }
+    } else { $unavailable += 'dump policy CrashDumpEnabled' }
+
+    $baseFree = Get-SoPathValue $baselineObj @('Trend', 'SystemDriveFree', 'FreeGB') $null
+    $curFree = Get-SoPathValue $current @('Trend', 'SystemDriveFree', 'FreeGB') $null
+    if ($null -ne $baseFree -and $null -ne $curFree) {
+        $bFree = ConvertTo-SoInt $baseFree $null
+        $cFree = ConvertTo-SoInt $curFree $null
+        if ($null -ne $bFree -and $null -ne $cFree -and $bFree -ne $cFree) {
+            $baseDrive = [string](Get-SoPathValue $baselineObj @('Trend', 'SystemDriveFree', 'Drive') 'system drive')
+            $curDrive = [string](Get-SoPathValue $current @('Trend', 'SystemDriveFree', 'Drive') $baseDrive)
+            $bPct = Get-SoPathValue $baselineObj @('Trend', 'SystemDriveFree', 'FreePct') $null
+            $cPct = Get-SoPathValue $current @('Trend', 'SystemDriveFree', 'FreePct') $null
+            $lines += "System-drive free space changed on $baseDrive/$curDrive from $bFree GB ($bPct%) to $cFree GB ($cPct%)."
+            $changed = $true
+        }
+    } else { $unavailable += 'system-drive free space' }
+
+    $baseRead = @{}
+    foreach ($r in @((Get-SoPathValue $baselineObj @('Readability') @()))) {
+        $sig = [string](Get-SoPathValue $r @('Signal') '')
+        if ($sig) { $baseRead[$sig] = ConvertTo-SoBool (Get-SoPathValue $r @('Readable') $false) }
+    }
+    $curRead = @{}
+    foreach ($r in @((Get-SoPathValue $current @('Readability') @()))) {
+        $sig = [string](Get-SoPathValue $r @('Signal') '')
+        if ($sig) { $curRead[$sig] = ConvertTo-SoBool (Get-SoPathValue $r @('Readable') $false) }
+    }
+    if ($baseRead.Count -eq 0 -or $curRead.Count -eq 0) {
+        $unavailable += 'readability transitions'
+    } else {
+        $allSignals = @($baseRead.Keys + $curRead.Keys | Sort-Object -Unique)
+        foreach ($sig in $allSignals) {
+            if ($baseRead.ContainsKey($sig) -and $curRead.ContainsKey($sig)) {
+                if ($baseRead[$sig] -and -not $curRead[$sig]) {
+                    $lines += "Readability regression: $sig was readable in the baseline but NOT readable now."
+                    $changed = $true
+                } elseif ((-not $baseRead[$sig]) -and $curRead[$sig]) {
+                    $lines += "Readability improvement: $sig was NOT readable in the baseline but readable now."
+                    $changed = $true
+                }
+            }
+        }
+    }
+
+    $baseTop = Get-SoTopHypothesis $baselineObj
+    $curTop = Get-SoTopHypothesis $current
+    if ($baseTop.Title -ne $curTop.Title -or $baseTop.Tier -ne $curTop.Tier -or $baseTop.Confidence -ne $curTop.Confidence) {
+        $lines += "Top hypothesis changed from $($baseTop.Display) to $($curTop.Display). This is a note only; the current scorer still ranks the current run alone."
+        $changed = $true
+    } else {
+        $lines += "Top hypothesis unchanged: $($curTop.Display)."
+    }
+
+    $baseObserved = @((ConvertTo-SoStringSet (Get-SoPathValue $baselineObj @('Observed') @())))
+    $curObserved = @((ConvertTo-SoStringSet (Get-SoPathValue $current @('Observed') @())))
+    $newObserved = @($curObserved | Where-Object { $baseObserved -notcontains $_ })
+    $clearedObserved = @($baseObserved | Where-Object { $curObserved -notcontains $_ })
+    foreach ($o in $newObserved) {
+        $lines += "New observed weak signal: $o"
+        $changed = $true
+    }
+    foreach ($o in $clearedObserved) {
+        $lines += "Cleared observed weak signal: $o"
+        $changed = $true
+    }
+    if (@($newObserved).Count -eq 0 -and @($clearedObserved).Count -eq 0) {
+        $lines += 'Observed weak signals unchanged.'
+    }
+
+    $unavailable = @($unavailable | Sort-Object -Unique)
+    if (@($unavailable).Count -gt 0) {
+        $lines += "Not compared because one run did not report the field: $($unavailable -join ', '). This is missing comparison data, not proof of no change."
+    }
+    if (-not $changed) {
+        $lines = @('No tracked deltas changed among fields both runs reported. This is not a clean bill; it only means the saved evidence matched the current evidence for those comparison fields.') + $lines
+    }
+
+    [pscustomobject]@{
+        Usable = $true
+        Status = 'compared'
+        VersionStampMismatch = $versionMismatch
+        Lines = @($lines)
+    }
+}
+
+function Read-SoBaselineEvidence($BaselinePath) {
+    if ([string]::IsNullOrWhiteSpace([string]$BaselinePath)) { return $null }
+    $target = [string]$BaselinePath
+    if (Test-Path -LiteralPath $target -PathType Container) {
+        $direct = Join-Path $target 'redacted-evidence.json'
+        $packet = Join-Path (Join-Path $target 'packet') 'redacted-evidence.json'
+        if (Test-Path -LiteralPath $direct -PathType Leaf) {
+            $target = $direct
+        } elseif (Test-Path -LiteralPath $packet -PathType Leaf) {
+            $target = $packet
+        } else {
+            return [pscustomobject]@{ Usable = $false; Evidence = $null; Path = $target; Reason = 'folder did not contain redacted-evidence.json.' }
+        }
+    } elseif (-not (Test-Path -LiteralPath $target -PathType Leaf)) {
+        return [pscustomobject]@{ Usable = $false; Evidence = $null; Path = $target; Reason = 'baseline file was missing.' }
+    }
+    try {
+        $obj = Get-Content -Raw -LiteralPath $target -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+        $schema = [string](Get-SoPathValue $obj @('SchemaVersion') '')
+        if ($schema -ne '1.0') {
+            if ([string]::IsNullOrWhiteSpace($schema)) { $schema = 'missing' }
+            return [pscustomobject]@{ Usable = $false; Evidence = $obj; Path = $target; Reason = "baseline SchemaVersion '$schema' is not supported; expected 1.0." }
+        }
+        return [pscustomobject]@{ Usable = $true; Evidence = $obj; Path = $target; Reason = '' }
+    } catch {
+        return [pscustomobject]@{ Usable = $false; Evidence = $null; Path = $target; Reason = 'baseline JSON could not be read or parsed.' }
+    }
+}
+
+function Build-BaselineDiffPacketText($diff, $stamp) {
+    $sb = New-Object System.Text.StringBuilder
+    [void]$sb.AppendLine('# Second Opinion baseline diff')
+    [void]$sb.AppendLine('')
+    [void]$sb.AppendLine((Get-PacketStampLine $stamp))
+    [void]$sb.AppendLine('')
+    [void]$sb.AppendLine('Notes only: this comparison never sets or changes any tier, confidence, or culprit.')
+    [void]$sb.AppendLine('')
+    foreach ($line in (Get-SoBaselineDiffLines $diff)) {
+        [void]$sb.AppendLine("- $(Protect-PromptValue $line)")
+    }
+    return $sb.ToString()
 }
 
 function Build-UnreadableSignalsText($diag, $stamp) {
@@ -2375,20 +2787,26 @@ function New-HelperPacketArtifacts($sys, $diag, $map, $stamp) {
     $rawSummary = Build-HelperSummary $sys $diag $stamp
     $rawEvidence = Build-RedactedEvidenceJson $sys $diag $stamp
     $rawUnreadable = Build-UnreadableSignalsText $diag $stamp
-    $counts = Get-RedactionAuditCounts @($rawSummary, $rawEvidence, $rawUnreadable) $map
+    $rawDiff = $null
+    $baselineDiff = Get-SoBaselineDiff $diag
+    if ($baselineDiff) { $rawDiff = Build-BaselineDiffPacketText $baselineDiff $stamp }
+    $auditTexts = @($rawSummary, $rawEvidence, $rawUnreadable)
+    if ($rawDiff) { $auditTexts += $rawDiff }
+    $counts = Get-RedactionAuditCounts $auditTexts $map
     $rawAudit = Build-RedactionAuditText $counts $stamp
     $artifacts = [ordered]@{}
     $artifacts['helper-summary.md'] = Protect-Text $rawSummary $map
     $artifacts['redacted-evidence.json'] = Protect-Text $rawEvidence $map
+    if ($rawDiff) { $artifacts['baseline-diff.md'] = Protect-Text $rawDiff $map }
     $artifacts['redaction-audit.txt'] = Protect-Text $rawAudit $map
     $artifacts['unreadable-signals.txt'] = Protect-Text $rawUnreadable $map
     return $artifacts
 }
 
-function Write-HelperPacket($OutDir, $sys, $diag, $map) {
+function Write-HelperPacket($OutDir, $sys, $diag, $map, $stamp) {
     $packetDir = Join-Path $OutDir 'packet'
     New-Item -ItemType Directory -Force -Path $packetDir | Out-Null
-    $stamp = Get-SoVersionStamp
+    if (-not $stamp) { $stamp = Get-SoVersionStamp }
     $artifacts = New-HelperPacketArtifacts $sys $diag $map $stamp
     foreach ($name in $artifacts.Keys) {
         Set-Content -LiteralPath (Join-Path $packetDir $name) -Value $artifacts[$name] -Encoding UTF8
@@ -2491,6 +2909,16 @@ td.k{color:var(--muted);width:42%}
     if ($diag.AppCrashCount -ge 1)    { $summary += ", $($diag.AppCrashCount) app crash event(s)" }
     [void]$sb.AppendLine("<div class=""note"">$(ConvertTo-HtmlText $summary) in the window.</div>")
     foreach ($n in $diag.Notes) { [void]$sb.AppendLine("<div class=""note"">$(ConvertTo-HtmlText $n)</div>") }
+
+    $baselineDiff = Get-SoBaselineDiff $diag
+    if ($baselineDiff) {
+        [void]$sb.AppendLine('<div class="section-label">What changed since the baseline</div><div class="card">')
+        [void]$sb.AppendLine('<p class="ev"><span class="lbl">Notes only; this never changes the deterministic ranking, tier, or confidence.</span></p>')
+        foreach ($line in (Get-SoBaselineDiffLines $baselineDiff)) {
+            [void]$sb.AppendLine("<p class=""ev""><span class=""lbl"">&bull;</span> $(ConvertTo-HtmlText $line)</p>")
+        }
+        [void]$sb.AppendLine('</div>')
+    }
 
     # What the user reported (optional intake) - treated as ground truth, reconciled with the signals.
     $intakeLines = Format-IntakeLines $diag.Intake
@@ -2640,6 +3068,19 @@ $data = [pscustomobject]@{
 }
 
 $diag = New-Diagnosis $data
+$stamp = Get-SoVersionStamp
+$diag | Add-Member -NotePropertyName EvidenceSnapshot -NotePropertyValue (New-SoEvidenceObject $sys $diag $stamp) -Force
+if ($Baseline) {
+    $baselineLoad = Read-SoBaselineEvidence $Baseline
+    if ($baselineLoad -and $baselineLoad.Usable) {
+        $diff = Compare-SoEvidence $baselineLoad.Evidence $diag
+    } elseif ($baselineLoad) {
+        $diff = New-SoBaselineDiffAbstention $baselineLoad.Reason
+    } else {
+        $diff = New-SoBaselineDiffAbstention 'baseline path was not supplied.'
+    }
+    $diag | Add-Member -NotePropertyName BaselineDiff -NotePropertyValue $diff -Force
+}
 
 if (-not $OutDir) {
     Write-Host ''
@@ -2665,12 +3106,13 @@ $prompt = Build-AiPrompt $sys $diag $map $redact
 Set-Content -Path $promptPath -Value $prompt -Encoding UTF8
 $packetInfo = $null
 if ($HelperPacket) {
-    $packetInfo = Write-HelperPacket $OutDir $sys $diag $map
+    $packetInfo = Write-HelperPacket $OutDir $sys $diag $map $stamp
 }
 
 Write-Host ''
 Write-Host ("  {0} system crash(es), {1} unexplained restart(s), {2} culprit(s) ranked." -f $diag.CrashCount, $diag.UnexplainedCount, @($diag.Culprits).Count)
 if ($DeepDump) { Write-Host ("  Deep dump: {0}" -f $diag.DeepDump.Status) }
+if ($Baseline) { Write-Host ("  Baseline: {0}" -f $diag.BaselineDiff.Status) }
 Write-Host "  Report:  $reportPath" -ForegroundColor Green
 Write-Host "  Prompt:  $promptPath  (redacted: $redact)" -ForegroundColor Green
 if ($packetInfo) { Write-Host "  Packet:  $($packetInfo.PacketDir)  (always redacted)" -ForegroundColor Green }
