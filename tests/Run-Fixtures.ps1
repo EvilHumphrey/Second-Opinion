@@ -273,6 +273,108 @@ foreach ($dc in $deepChecks) {
     else { Write-Host "VIOLATED  $($dc.N)" -ForegroundColor Red; $afail++ }
 }
 
+# ---- Deep-dump locator/reader unit tests (trust-audit 2026-06-26 finding P3): the pure header parser
+#      plus the Resolve-DumpPath / Read-DumpModule / Get-DeepDumpResult assembly had NO coverage - the gap
+#      that let the v0.3.2 honest-abstention bug ship. These drive Read-DumpHeaderInfo with hand-crafted
+#      128-byte headers (no real dump) and exercise the locator/reader against TEMP dump files. The header-
+#      only branch is reached by neutralizing debugger DISCOVERY (this dev box ships cdb.exe in the Windows
+#      Kit, so a bare -DebuggerPath '' would otherwise hit the cdb path): we clear PATH + the ProgramFiles
+#      roots so the REAL Get-DumpDebuggerPath returns null - exercising the genuine no-debugger path, NOT
+#      faking cdb output. The cdb-attributed / debugger-failed branches need a real debugger and stay
+#      uncovered (no mocking here). Temp files are crafted up front and removed in a finally.
+$script:DdTempFiles = New-Object System.Collections.ArrayList
+function New-DdTempFile([byte[]]$Bytes) {
+    $p = Join-Path $env:TEMP ("so-deepdump-test-{0}.dmp" -f ([guid]::NewGuid().ToString('N')))
+    [System.IO.File]::WriteAllBytes($p, $Bytes)
+    [void]$script:DdTempFiles.Add($p)
+    return $p
+}
+# Build a 128-byte (or $Size) dump header: 4-byte $Sig at 0, 4-byte $Valid at 4, then UInt32/UInt64 values
+# at the given byte offsets. BitConverter handles endianness to match Read-DumpHeaderInfo's reads.
+function New-DdHeaderBytes {
+    param([string]$Sig, [string]$Valid, [hashtable]$U32 = @{}, [hashtable]$U64 = @{}, [int]$Size = 128)
+    $b = New-Object byte[] $Size
+    if ($Sig)   { $sb = [System.Text.Encoding]::ASCII.GetBytes($Sig);   [Array]::Copy($sb, 0, $b, 0, [Math]::Min(4, $sb.Length)) }
+    if ($Valid) { $vb = [System.Text.Encoding]::ASCII.GetBytes($Valid); [Array]::Copy($vb, 0, $b, 4, [Math]::Min(4, $vb.Length)) }
+    foreach ($off in $U32.Keys) { $eb = [BitConverter]::GetBytes([uint32]$U32[$off]); [Array]::Copy($eb, 0, $b, [int]$off, 4) }
+    foreach ($off in $U64.Keys) { $eb = [BitConverter]::GetBytes([uint64]$U64[$off]); [Array]::Copy($eb, 0, $b, [int]$off, 8) }
+    return ,$b
+}
+# Run $Body with cdb DISCOVERY neutralized (PATH + ProgramFiles roots), then restore. Drives the real
+# Get-DumpDebuggerPath to null so Read-DumpModule / Get-DeepDumpResult take the header-only branch.
+function Invoke-DdWithoutDebugger([scriptblock]$Body) {
+    $sPath = $env:Path; $sPf = $env:ProgramFiles; $sPf86 = ${env:ProgramFiles(x86)}
+    try {
+        $env:Path = ''; $env:ProgramFiles = ''; ${env:ProgramFiles(x86)} = ''
+        & $Body
+    } finally {
+        $env:Path = $sPath; $env:ProgramFiles = $sPf; ${env:ProgramFiles(x86)} = $sPf86
+    }
+}
+try {
+    # (a) valid 64-bit DU64 header: nonzero code at 0x38, four UInt64 params at 0x40/0x48/0x50/0x58.
+    $ddDu64Valid = New-DdTempFile (New-DdHeaderBytes 'PAGE' 'DU64' @{ 0x38 = 0x116 } @{ 0x40 = 0x11; 0x48 = 0x22; 0x50 = 0x33; 0x58 = 0x44 } 128)
+    # (b) truncated DU64 (80 bytes: passes the <64 guard, fails the >=0x60 DU64 guard) -> audit #4 fix.
+    $ddDu64Trunc = New-DdTempFile (New-DdHeaderBytes 'PAGE' 'DU64' @{} @{} 80)
+    # (c) full DU64 whose code bytes are all 0x00 -> reject-0x00 (a zeroed header is not bugcheck 0).
+    $ddDu64Zero  = New-DdTempFile (New-DdHeaderBytes 'PAGE' 'DU64' @{} @{} 128)
+    # (d) valid 32-bit DUMP header: code at 0x28, four UInt32 params at 0x2c/0x30/0x34/0x38.
+    $ddDump32    = New-DdTempFile (New-DdHeaderBytes 'PAGE' 'DUMP' @{ 0x28 = 0xD1; 0x2c = 0xAA; 0x30 = 0xBB; 0x34 = 0xCC; 0x38 = 0xDD } @{} 128)
+    # (e) MDMP minidump header -> object with a null code. (f) garbage sig and (g) a too-short file -> null.
+    $ddMdmp      = New-DdTempFile (New-DdHeaderBytes 'MDMP' '' @{} @{} 128)
+    $ddGarbage   = New-DdTempFile (New-DdHeaderBytes 'XXXX' 'YYYY' @{} @{} 128)
+    $ddTooShort  = New-DdTempFile (New-DdHeaderBytes 'PAGE' 'DU64' @{} @{} 32)
+
+    $ddHValid = Read-DumpHeaderInfo $ddDu64Valid
+    $ddHTrunc = Read-DumpHeaderInfo $ddDu64Trunc
+    $ddHZero  = Read-DumpHeaderInfo $ddDu64Zero
+    $ddH32    = Read-DumpHeaderInfo $ddDump32
+    $ddHMdmp  = Read-DumpHeaderInfo $ddMdmp
+    $ddHGarb  = Read-DumpHeaderInfo $ddGarbage
+    $ddHShort = Read-DumpHeaderInfo $ddTooShort
+
+    # Locator: a readable WER DumpPath is the first candidate and wins (deterministic regardless of any
+    # real C:\Windows dump on the runner; we never assert 'not-found', which would be environment-fragile).
+    $ddResFound = Resolve-DumpPath -Crashes @([pscustomobject]@{ DumpPath = $ddDu64Valid; Time = (Get-Date) })
+
+    # Dedup: an existing-but-unreadable dump (held with an exclusive FileShare.None lock) passed TWICE must
+    # record exactly ONE "could not be read" note, never two. Counting notes for OUR path stays deterministic
+    # even on a runner that also has a real dump further down the candidate list.
+    $ddLock = New-DdTempFile (New-DdHeaderBytes 'PAGE' 'DU64' @{ 0x38 = 0x116 } @{} 128)
+    $ddLockFs = [System.IO.File]::Open($ddLock, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::None)
+    try {
+        $ddDupCrash = [pscustomobject]@{ DumpPath = $ddLock; Time = (Get-Date) }
+        $ddResDedup = Resolve-DumpPath -Crashes @($ddDupCrash, $ddDupCrash)
+    } finally { $ddLockFs.Close() }
+    $ddDupNotes = @($ddResDedup.Notes | Where-Object { $_ -match [regex]::Escape((Split-Path -Leaf $ddLock)) }).Count
+
+    # Reader + assembly with no discoverable debugger -> header-only carrying the header's code.
+    $ddHeaderOnly = Invoke-DdWithoutDebugger { Read-DumpModule -Path $ddDu64Valid -DebuggerPath '' }
+    $ddDeep       = Invoke-DdWithoutDebugger { Get-DeepDumpResult @([pscustomobject]@{ DumpPath = $ddDu64Valid; Time = (Get-Date) }) }
+
+    $deepReaderChecks = @(
+        @{ N = 'deep-dump header: a valid PAGE/DU64 (64-bit) header parses code 0x116 + its four parameters'; C = { $ddHValid -and ($ddHValid.Format -eq 'DUMP64') -and ($ddHValid.BugcheckCode -eq '0x116') -and ((@($ddHValid.BugcheckParameters) -join ',') -eq '11,22,33,44') } }
+        @{ N = 'deep-dump header: a truncated (<0x60-byte) DU64 header abstains to null (audit #4 length guard)'; C = { $null -eq $ddHTrunc } }
+        @{ N = 'deep-dump header: a DU64 header whose code bytes are 0x00 abstains to null (reject-0x00, not bugcheck 0)'; C = { $null -eq $ddHZero } }
+        @{ N = 'deep-dump header: a valid PAGE/DUMP (32-bit) header parses code 0xD1 + its four parameters'; C = { $ddH32 -and ($ddH32.Format -eq 'DUMP32') -and ($ddH32.BugcheckCode -eq '0xD1') -and ((@($ddH32.BugcheckParameters) -join ',') -eq 'aa,bb,cc,dd') } }
+        @{ N = 'deep-dump header: an MDMP minidump header yields an object with a null bugcheck code'; C = { $ddHMdmp -and ($ddHMdmp.Format -eq 'MDMP') -and ($null -eq $ddHMdmp.BugcheckCode) -and (@($ddHMdmp.BugcheckParameters).Count -eq 0) } }
+        @{ N = 'deep-dump header: an unrecognized signature abstains to null'; C = { $null -eq $ddHGarb } }
+        @{ N = 'deep-dump header: a too-short (<64-byte) file abstains to null'; C = { $null -eq $ddHShort } }
+        @{ N = 'deep-dump locator: a readable WER dump path resolves to found with that path + a WER source'; C = { ($ddResFound.Status -eq 'found') -and ($ddResFound.Path -eq $ddDu64Valid) -and ($ddResFound.Source -match 'WER') } }
+        @{ N = 'deep-dump locator: the same dump path twice is deduped (exactly ONE unreadable note, not two)'; C = { $ddDupNotes -eq 1 } }
+        @{ N = 'deep-dump reader: with no debugger, a valid-header dump yields header-only carrying the header code + no module'; C = { ($ddHeaderOnly.Status -eq 'header-only') -and ($ddHeaderOnly.Tool -eq 'none') -and ($ddHeaderOnly.BugcheckCode -eq '0x116') -and ($ddHeaderOnly.ModuleName -eq '') -and (-not $ddHeaderOnly.IsThirdParty) } }
+        @{ N = 'deep-dump assembly: Get-DeepDumpResult assembles the located dump + header-only read into the opt-in result'; C = { ($ddDeep.Requested -eq $true) -and ($ddDeep.Status -eq 'header-only') -and ($ddDeep.Path -eq $ddDu64Valid) -and ($ddDeep.Source -match 'WER') -and ($ddDeep.BugcheckCode -eq '0x116') -and ($ddDeep.ModuleName -eq '') -and (-not $ddDeep.IsThirdParty) -and ($ddDeep.Tool -eq 'none') } }
+    )
+    foreach ($dc in $deepReaderChecks) {
+        $ok = $false
+        try { $ok = [bool](& $dc.C) } catch { $ok = $false }
+        if ($ok) { Write-Host "OK        $($dc.N)" -ForegroundColor Green; $apass++ }
+        else { Write-Host "VIOLATED  $($dc.N)" -ForegroundColor Red; $afail++ }
+    }
+} finally {
+    foreach ($t in $script:DdTempFiles) { try { Remove-Item -LiteralPath $t -Force -ErrorAction SilentlyContinue } catch { } }
+}
+
 # ---- Render/prompt-layer probes: the fingerprint cannot see Format-IntakeLines or the block
 #      insertion (Slice B.1's lesson: render/prompt false-cleans need their own LIVE probes). Build a
 #      minimal $sys and render the gpu-failure-01-intake (intake present) and empty (no intake) diagnoses.
