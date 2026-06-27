@@ -57,6 +57,7 @@ function _data($h) {
         RamRatedSpeed   = [int]$h.RamRatedSpeed
         Intake          = if ($null -ne $h.Intake) { $h.Intake } else { $null }
         DumpConfig      = if ($null -ne $h.DumpConfig) { $h.DumpConfig } else { $null }
+        DeepDump        = if ($null -ne $h.DeepDump) { $h.DeepDump } else { $null }
     }
 }
 

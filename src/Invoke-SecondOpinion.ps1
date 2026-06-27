@@ -19,10 +19,13 @@ param(
     [string]$OutDir,
     [switch]$OpenReport,
     [switch]$NoRedact,
-    [switch]$NoIntake
+    [switch]$NoIntake,
+    [switch]$DeepDump,
+    [switch]$HelperPacket
 )
 
 $ErrorActionPreference = 'Continue'
+$ScriptVersion = '0.3.0'
 
 # ---------------------------------------------------------------------------
 # Paths + knowledge base
@@ -83,6 +86,12 @@ function Import-Kb($name) {
     if (-not $DataDir) { return $null }   # web-run: no external data/ on disk -> caller uses the embedded KB
     $p = Join-Path $DataDir $name
     if (Test-Path $p) { Invoke-Safe { Get-Content -Raw -Path $p | ConvertFrom-Json } } else { $null }
+}
+
+function Import-KbRaw($name) {
+    if (-not $DataDir) { return $null }   # web-run: no external data/ on disk -> caller uses the embedded KB
+    $p = Join-Path $DataDir $name
+    if (Test-Path $p) { Invoke-Safe { Get-Content -Raw -Path $p } } else { $null }
 }
 # bugchecks.json is the one consumed data KB (Get-BugcheckInfo). The event vocabulary is NOT data-driven:
 # the collectors below are the single source of truth for which events the scorer acts on. The curated
@@ -477,12 +486,39 @@ $EmbeddedBugchecksJson = @'
 }
 '@
 # KB-EMBED-END
-$BugchecksKb = Import-Kb 'bugchecks.json'
-if (-not $BugchecksKb) { $BugchecksKb = Invoke-Safe { $EmbeddedBugchecksJson | ConvertFrom-Json } }
+$BugcheckKbRaw = Import-KbRaw 'bugchecks.json'
+$BugchecksKb = $null
+if ($BugcheckKbRaw) { $BugchecksKb = Invoke-Safe { $BugcheckKbRaw | ConvertFrom-Json } }
+if (-not $BugchecksKb) {
+    $BugcheckKbRaw = $EmbeddedBugchecksJson
+    $BugchecksKb = Invoke-Safe { $BugcheckKbRaw | ConvertFrom-Json }
+}
 
 # ---------------------------------------------------------------------------
 # Small helpers
 # ---------------------------------------------------------------------------
+function Get-Sha256Hex($text) {
+    if ($null -eq $text) { $text = '' }
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $bytes = [System.Text.Encoding]::UTF8.GetBytes([string]$text)
+        $hash = $sha.ComputeHash($bytes)
+        return (($hash | ForEach-Object { $_.ToString('x2') }) -join '')
+    } finally {
+        $sha.Dispose()
+    }
+}
+
+function Get-SoVersionStamp {
+    $git = Invoke-Safe { (git rev-parse --short HEAD 2>$null).Trim() } 'n/a'
+    if ([string]::IsNullOrWhiteSpace($git)) { $git = 'n/a' }
+    [pscustomobject]@{
+        ToolVersion = $ScriptVersion
+        KbHash      = Get-Sha256Hex $BugcheckKbRaw
+        GitSha      = $git
+    }
+}
+
 function Format-Bugcheck($code) {
     $c = [int64]$code
     if ($c -le 0xFF) { return ('0x{0:X2}' -f $c) } else { return ('0x{0:X}' -f $c) }
@@ -606,6 +642,373 @@ function Parse-BugCheckEvent($event) {
     }
 
     return [pscustomobject]@{ BugcheckCode = $codeStr; DumpPath = $dump }
+}
+
+function ConvertTo-DumpUInt64($value) {
+    if ($null -eq $value) { return $null }
+    $s = ([string]$value).Trim()
+    if ($s -match '^0x') { $s = $s.Substring(2) }
+    $s = ($s -replace '`', '')
+    if ($s -notmatch '^[0-9A-Fa-f]+$') { return $null }
+    try { return [Convert]::ToUInt64($s, 16) } catch { return $null }
+}
+
+function Format-DumpAddress($value) {
+    if ($null -eq $value) { return '' }
+    return ('0x{0:x}' -f ([uint64]$value))
+}
+
+function Get-DumpModuleDisplayName($module) {
+    if (-not $module) { return '' }
+    $name = [string]$module.ImageName
+    if ([string]::IsNullOrWhiteSpace($name) -and $module.ImagePath) {
+        $name = Split-Path -Leaf ([string]$module.ImagePath)
+    }
+    if ([string]::IsNullOrWhiteSpace($name)) { $name = [string]$module.ModuleName }
+    if ($name -eq 'nt') { return 'ntoskrnl.exe' }
+    return $name
+}
+
+function Test-GenericOsModuleName($name) {
+    if ([string]::IsNullOrWhiteSpace($name)) { return $true }
+    $leaf = Split-Path -Leaf ([string]$name)
+    $base = [IO.Path]::GetFileNameWithoutExtension($leaf).ToLowerInvariant()
+    $generic = @(
+        'nt', 'ntoskrnl', 'ntkrnlmp', 'ntkrnlpa', 'ntkrpamp', 'hal', 'kdcom', 'bootvid',
+        'pshed', 'clfs', 'tm', 'ci', 'msrpc', 'werkernel', 'win32k', 'win32kbase',
+        'win32kfull', 'dxgkrnl', 'dxgmms1', 'dxgmms2', 'watchdog', 'storport', 'stornvme',
+        'spaceport', 'partmgr', 'disk', 'volmgr', 'volsnap', 'mountmgr', 'ntfs', 'refs',
+        'fltmgr', 'iorate', 'classpnp', 'acpi', 'pci', 'pcw', 'wdf01000', 'ndis', 'netio',
+        'tcpip', 'afd', 'ksecdd', 'cng', 'fileinfo', 'luafv', 'rdbss', 'mup', 'srv',
+        'ndiswan', 'bowser', 'nsiproxy', 'mslldp', 'tdx', 'usbccgp', 'usbhub3', 'ucx01000',
+        'hidclass', 'hidparse', 'kbdclass', 'mouclass', 'hdaudbus', 'portcls', 'ks'
+    )
+    if ($base -in $generic) { return $true }
+    if ($base -match '^(win32k|usb|hid|kbd|mou)') { return $true }
+    return $false
+}
+
+function Get-DeepDumpModuleClass($name) {
+    $leaf = Split-Path -Leaf ([string]$name)
+    $base = [IO.Path]::GetFileNameWithoutExtension($leaf).ToLowerInvariant()
+    if ($base -match '^(nvlddmkm|nvlddmkmoc|amdkmdag|amdwddmg|atikmdag|atikmpag|igdkmd64|igdkmd32|igfx|igfxn|igfxcuiservice)') {
+        return 'gpu'
+    }
+    return 'driver'
+}
+
+function New-ParsedDumpModule($start, $end, $moduleName, $imageName, $imagePath) {
+    [pscustomobject]@{
+        Start      = $start
+        End        = $end
+        ModuleName = $moduleName
+        ImageName  = $imageName
+        ImagePath  = $imagePath
+    }
+}
+
+function Find-DumpModuleForParameters($modules, $parameters) {
+    foreach ($p in @($parameters)) {
+        $addr = ConvertTo-DumpUInt64 $p
+        if ($null -eq $addr -or $addr -eq 0) { continue }
+        foreach ($m in @($modules)) {
+            if ($null -ne $m.Start -and $null -ne $m.End -and $addr -ge $m.Start -and $addr -lt $m.End) {
+                return [pscustomobject]@{ Address = $addr; Module = $m }
+            }
+        }
+    }
+    return $null
+}
+
+function ConvertFrom-DebuggerDumpText($text) {
+    $modules = @()
+    $params = @($null, $null, $null, $null)
+    $bugcheck = $null
+    $current = $null
+
+    foreach ($line in (([string]$text) -split "`r?`n")) {
+        if ($line -match '(?i)BugCheck\s+([0-9A-F`]+)\s*,\s*\{([^}]*)\}') {
+            $bugcheck = Format-Bugcheck ([Convert]::ToInt64(($matches[1] -replace '`', ''), 16))
+            $parts = @($matches[2] -split ',')
+            for ($i = 0; $i -lt [math]::Min(4, $parts.Count); $i++) { $params[$i] = $parts[$i].Trim() }
+        } elseif ($line -match '(?i)Bugcheck code\s+([0-9A-F`]+)') {
+            $bugcheck = Format-Bugcheck ([Convert]::ToInt64(($matches[1] -replace '`', ''), 16))
+        } elseif ($line -match '(?i)^Arguments\s+(.+)$') {
+            $parts = @($matches[1] -split '[,\s]+')
+            $pi = 0
+            foreach ($part in $parts) {
+                if ($part -match '^[0-9A-Fa-f`]+$' -and $pi -lt 4) {
+                    $params[$pi] = $part
+                    $pi++
+                }
+            }
+        } elseif ($line -match '(?i)^\s*Arg([1-4]):\s*([0-9A-F`]+)') {
+            $idx = [int]$matches[1] - 1
+            $params[$idx] = $matches[2]
+        }
+
+        if ($line -match '^\s*([0-9A-Fa-f`]{8,})\s+([0-9A-Fa-f`]{8,})\s+(\S+)(\s|$)') {
+            if ($current) {
+                $modules += New-ParsedDumpModule $current.Start $current.End $current.ModuleName $current.ImageName $current.ImagePath
+            }
+            $current = [pscustomobject]@{
+                Start      = ConvertTo-DumpUInt64 $matches[1]
+                End        = ConvertTo-DumpUInt64 $matches[2]
+                ModuleName = $matches[3]
+                ImageName  = ''
+                ImagePath  = ''
+            }
+        } elseif ($current -and $line -match '^\s*Image name:\s*(.+?)\s*$') {
+            $current.ImageName = $matches[1].Trim()
+        } elseif ($current -and $line -match '^\s*Image path:\s*(.+?)\s*$') {
+            $current.ImagePath = $matches[1].Trim()
+        }
+    }
+    if ($current) {
+        $modules += New-ParsedDumpModule $current.Start $current.End $current.ModuleName $current.ImageName $current.ImagePath
+    }
+
+    $mapped = Find-DumpModuleForParameters $modules $params
+    $moduleName = ''
+    $faultAddress = $null
+    $isThirdParty = $false
+    if ($mapped) {
+        $faultAddress = $mapped.Address
+        $moduleName = Get-DumpModuleDisplayName $mapped.Module
+        $isThirdParty = -not (Test-GenericOsModuleName $moduleName)
+    }
+
+    return [pscustomobject]@{
+        BugcheckCode       = $bugcheck
+        BugcheckParameters = @($params | Where-Object { $_ })
+        Modules            = @($modules)
+        FaultingAddress    = $faultAddress
+        ModuleName         = $moduleName
+        IsThirdParty       = $isThirdParty
+        RawText            = $text
+    }
+}
+
+function Get-DumpDebuggerPath {
+    $cmd = Get-Command cdb.exe -ErrorAction SilentlyContinue
+    if ($cmd) { return $cmd.Source }
+
+    $roots = @()
+    if (${env:ProgramFiles(x86)}) { $roots += (Join-Path ${env:ProgramFiles(x86)} 'Windows Kits\10\Debuggers') }
+    if ($env:ProgramFiles)        { $roots += (Join-Path $env:ProgramFiles        'Windows Kits\10\Debuggers') }
+    foreach ($root in $roots) {
+        foreach ($arch in @('x64', 'x86', 'arm64')) {
+            $p = Join-Path (Join-Path $root $arch) 'cdb.exe'
+            if (Test-Path -LiteralPath $p) { return $p }
+        }
+    }
+    return $null
+}
+
+function Invoke-DumpDebugger($dumpPath, $debuggerPath) {
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = $debuggerPath
+    $safeDumpPath = ([string]$dumpPath) -replace '"', '\"'
+    $psi.Arguments = '-z "' + $safeDumpPath + '" -c ".bugcheck; lmv; q"'
+    $psi.UseShellExecute = $false
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $psi.CreateNoWindow = $true
+    $psi.EnvironmentVariables['_NT_SYMBOL_PATH'] = ''
+    $psi.EnvironmentVariables['_NT_ALT_SYMBOL_PATH'] = ''
+
+    $p = New-Object System.Diagnostics.Process
+    $p.StartInfo = $psi
+    try {
+        [void]$p.Start()
+        $outTask = $p.StandardOutput.ReadToEndAsync()
+        $errTask = $p.StandardError.ReadToEndAsync()
+        if (-not $p.WaitForExit(30000)) {
+            try { $p.Kill() } catch { }
+            return [pscustomobject]@{ Success = $false; Text = ''; Error = 'debugger timed out'; ExitCode = $null }
+        }
+        $out = $outTask.Result
+        $err = $errTask.Result
+        $text = ($out + "`n" + $err)
+        return [pscustomobject]@{ Success = (($p.ExitCode -eq 0) -or ($text -match '(?i)BugCheck|Bugcheck code')); Text = $text; Error = $err; ExitCode = $p.ExitCode }
+    } catch {
+        return [pscustomobject]@{ Success = $false; Text = ''; Error = $_.Exception.Message; ExitCode = $null }
+    } finally {
+        try { $p.Dispose() } catch { }
+    }
+}
+
+function Read-DumpHeaderInfo($dumpPath) {
+    $fs = $null
+    try {
+        $fs = [System.IO.File]::Open($dumpPath, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+        $buf = New-Object byte[] 128
+        $read = $fs.Read($buf, 0, $buf.Length)
+        if ($read -lt 64) { return $null }
+        $sig = [System.Text.Encoding]::ASCII.GetString($buf, 0, 4)
+        $valid = [System.Text.Encoding]::ASCII.GetString($buf, 4, 4)
+        if ($sig -eq 'PAGE' -and $valid -eq 'DU64') {
+            $code = [BitConverter]::ToUInt32($buf, 0x38)
+            $params = @(
+                ('{0:x}' -f [BitConverter]::ToUInt64($buf, 0x40)),
+                ('{0:x}' -f [BitConverter]::ToUInt64($buf, 0x48)),
+                ('{0:x}' -f [BitConverter]::ToUInt64($buf, 0x50)),
+                ('{0:x}' -f [BitConverter]::ToUInt64($buf, 0x58))
+            )
+            return [pscustomobject]@{ Format = 'DUMP64'; BugcheckCode = (Format-Bugcheck $code); BugcheckParameters = $params }
+        }
+        if ($sig -eq 'PAGE' -and $valid -eq 'DUMP') {
+            $code = [BitConverter]::ToUInt32($buf, 0x28)
+            $params = @(
+                ('{0:x}' -f [BitConverter]::ToUInt32($buf, 0x2c)),
+                ('{0:x}' -f [BitConverter]::ToUInt32($buf, 0x30)),
+                ('{0:x}' -f [BitConverter]::ToUInt32($buf, 0x34)),
+                ('{0:x}' -f [BitConverter]::ToUInt32($buf, 0x38))
+            )
+            return [pscustomobject]@{ Format = 'DUMP32'; BugcheckCode = (Format-Bugcheck $code); BugcheckParameters = $params }
+        }
+        if ($sig -eq 'MDMP') { return [pscustomobject]@{ Format = 'MDMP'; BugcheckCode = $null; BugcheckParameters = @() } }
+    } catch {
+        return $null
+    } finally {
+        if ($fs) { $fs.Close() }
+    }
+    return $null
+}
+
+function Test-DumpFileReadable($dumpPath) {
+    $fs = $null
+    try {
+        $fs = [System.IO.File]::Open($dumpPath, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+        return [pscustomobject]@{ Readable = $true; Error = '' }
+    } catch {
+        return [pscustomobject]@{ Readable = $false; Error = $_.Exception.Message }
+    } finally {
+        if ($fs) { $fs.Close() }
+    }
+}
+
+function Resolve-DumpPath {
+    param($Crashes)
+    $candidates = @()
+    foreach ($c in @($Crashes | Sort-Object Time -Descending)) {
+        if ($c.DumpPath) {
+            $candidates += [pscustomobject]@{ Path = [string]$c.DumpPath; Source = 'WER BugCheck 1001'; Time = $c.Time }
+        }
+    }
+    $candidates += [pscustomobject]@{ Path = 'C:\Windows\MEMORY.DMP'; Source = 'C:\Windows\MEMORY.DMP'; Time = $null }
+    foreach ($d in @(Get-ChildItem -Path 'C:\Windows' -Filter 'Minidump*.dmp' -ErrorAction SilentlyContinue)) {
+        $candidates += [pscustomobject]@{ Path = $d.FullName; Source = 'C:\Windows\Minidump*.dmp'; Time = $d.LastWriteTime }
+    }
+    foreach ($d in @(Get-ChildItem -Path 'C:\Windows\Minidump' -Filter '*.dmp' -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending)) {
+        $candidates += [pscustomobject]@{ Path = $d.FullName; Source = 'C:\Windows\Minidump\*.dmp'; Time = $d.LastWriteTime }
+    }
+
+    $seen = @{}
+    $notes = @()
+    foreach ($c in @($candidates)) {
+        if (-not $c.Path) { continue }
+        $key = ([string]$c.Path).ToLowerInvariant()
+        if ($seen.ContainsKey($key)) { continue }
+        $seen[$key] = $true
+        if (-not (Test-Path -LiteralPath $c.Path -PathType Leaf)) { continue }
+        $read = Test-DumpFileReadable $c.Path
+        if ($read.Readable) {
+            return [pscustomobject]@{ Status = 'found'; Path = $c.Path; Source = $c.Source; Notes = @($notes) }
+        }
+        $notes += "Dump exists but could not be read: $($c.Path) ($($read.Error))."
+    }
+    if ($notes.Count -gt 0) {
+        return [pscustomobject]@{ Status = 'unreadable'; Path = $null; Source = ''; Notes = @($notes) }
+    }
+    return [pscustomobject]@{ Status = 'not-found'; Path = $null; Source = ''; Notes = @() }
+}
+
+function Read-DumpModule {
+    param([string]$Path, [string]$DebuggerPath)
+    $header = Read-DumpHeaderInfo $Path
+    if (-not $DebuggerPath) { $DebuggerPath = Get-DumpDebuggerPath }
+    if (-not $DebuggerPath) {
+        return [pscustomobject]@{
+            Status             = 'header-only'
+            Path               = $Path
+            Tool               = 'none'
+            BugcheckCode       = if ($header) { $header.BugcheckCode } else { $null }
+            BugcheckParameters = if ($header) { @($header.BugcheckParameters) } else { @() }
+            ModuleName         = ''
+            FaultingAddress    = $null
+            IsThirdParty       = $false
+            Detail             = 'No local cdb.exe debugger was found; only dump header metadata was available.'
+        }
+    }
+
+    $dbg = Invoke-DumpDebugger $Path $DebuggerPath
+    if (-not $dbg.Success) {
+        return [pscustomobject]@{
+            Status             = 'debugger-failed'
+            Path               = $Path
+            Tool               = $DebuggerPath
+            BugcheckCode       = if ($header) { $header.BugcheckCode } else { $null }
+            BugcheckParameters = if ($header) { @($header.BugcheckParameters) } else { @() }
+            ModuleName         = ''
+            FaultingAddress    = $null
+            IsThirdParty       = $false
+            Detail             = "cdb.exe could not parse the dump: $($dbg.Error)"
+        }
+    }
+
+    $parsed = ConvertFrom-DebuggerDumpText $dbg.Text
+    $bug = $parsed.BugcheckCode
+    $params = @($parsed.BugcheckParameters)
+    if (-not $bug -and $header) { $bug = $header.BugcheckCode }
+    if ($params.Count -eq 0 -and $header) { $params = @($header.BugcheckParameters) }
+    $status = if ($parsed.ModuleName) { 'attributed' } else { 'unattributed' }
+    return [pscustomobject]@{
+        Status             = $status
+        Path               = $Path
+        Tool               = $DebuggerPath
+        BugcheckCode       = $bug
+        BugcheckParameters = @($params)
+        ModuleName         = $parsed.ModuleName
+        FaultingAddress    = $parsed.FaultingAddress
+        IsThirdParty       = [bool]$parsed.IsThirdParty
+        Detail             = ''
+    }
+}
+
+function Get-DeepDumpResult($crashes) {
+    $resolved = Resolve-DumpPath -Crashes $crashes
+    if (-not $resolved.Path) {
+        return [pscustomobject]@{
+            Requested          = $true
+            Status             = $resolved.Status
+            Path               = ''
+            Source             = $resolved.Source
+            Notes              = @($resolved.Notes)
+            BugcheckCode       = $null
+            BugcheckParameters = @()
+            ModuleName         = ''
+            FaultingAddress    = $null
+            IsThirdParty       = $false
+            Tool               = ''
+            Detail             = ''
+        }
+    }
+    $read = Read-DumpModule -Path $resolved.Path
+    return [pscustomobject]@{
+        Requested          = $true
+        Status             = $read.Status
+        Path               = $resolved.Path
+        Source             = $resolved.Source
+        Notes              = @($resolved.Notes)
+        BugcheckCode       = $read.BugcheckCode
+        BugcheckParameters = @($read.BugcheckParameters)
+        ModuleName         = $read.ModuleName
+        FaultingAddress    = $read.FaultingAddress
+        IsThirdParty       = [bool]$read.IsThirdParty
+        Tool               = $read.Tool
+        Detail             = $read.Detail
+    }
 }
 
 # ---------------------------------------------------------------------------
@@ -1017,6 +1420,8 @@ function Get-ConfRank($c) { switch ($c) { 'High' { 0 } 'Medium' { 1 } 'Low' { 2 
 
 function New-Diagnosis($data) {
     $culprits = @(); $ruledOut = @(); $notes = @()
+    $deepObserved = @()
+    $deepDumpBlocksClean = $false
 
     # Normalize the system-crash set. 1001 carries the WER bugcheck record; a BSOD can also raise a
     # Kernel-Power 41 carrying the same code. Merge only that cross-source double-log shape. Two WER
@@ -1284,6 +1689,63 @@ function New-Diagnosis($data) {
         }
     }
 
+    # Optional deep dump bridge: evidence only. A parsed module can corroborate an already-ranked GPU or
+    # driver node, or become an Observed weak signal when no matching node exists. It never creates a
+    # culprit and never changes tier/confidence.
+    $deep = $data.DeepDump
+    if ($deep -and $deep.Requested) {
+        $deepDumpBlocksClean = $true
+        foreach ($dn in @($deep.Notes)) { if ($dn) { $notes += "Deep dump: $dn" } }
+
+        $stopNote = ''
+        if ($deep.BugcheckCode) {
+            if ($codesPresent -contains $deep.BugcheckCode) {
+                $stopNote = " Dump stop code $($deep.BugcheckCode) matches the event log."
+            } elseif (@($codesPresent).Count -gt 0) {
+                $stopNote = " Dump stop code $($deep.BugcheckCode) did not match the event-log stop code(s) in this window ($($codesPresent -join ', ')); treating it as weak context only."
+            } else {
+                $stopNote = " Dump stop code $($deep.BugcheckCode) was read from the dump header/debugger output."
+            }
+        }
+
+        if ($deep.Status -eq 'not-found') {
+            $notes += 'Deep dump: -DeepDump was requested, but no crash dump file was found from WER dump paths, C:\Windows\MEMORY.DMP, or C:\Windows\Minidump. Missing dump data is not clean.'
+        } elseif ($deep.Status -eq 'unreadable') {
+            $notes += 'Deep dump: a crash dump file exists, but it was not readable in this run. Re-run elevated only if you choose to inspect it; this missing dump data is not clean.'
+        } elseif ($deep.Status -eq 'debugger-failed') {
+            $detail = if ($deep.Detail) { " $($deep.Detail)" } else { '' }
+            $notes += "Deep dump: a dump file was found at $($deep.Path), but cdb.exe could not parse it.$detail$stopNote This is missing module data, not clean."
+        } elseif ($deep.Status -eq 'header-only') {
+            $detail = if ($deep.Detail) { " $($deep.Detail)" } else { '' }
+            $notes += "Deep dump: a dump file was found at $($deep.Path), but no loaded-module list could be read.$detail$stopNote Deep dump did not isolate a third-party module."
+        } elseif ($deep.Status -eq 'unattributed') {
+            $notes += "Deep dump: parsed $($deep.Path), but no bugcheck parameter mapped to a loaded module.$stopNote Deep dump did not isolate a third-party module."
+        } elseif ($deep.Status -eq 'attributed' -and $deep.ModuleName) {
+            $mod = [string]$deep.ModuleName
+            $addrText = if ($deep.FaultingAddress) { " at $(Format-DumpAddress $deep.FaultingAddress)" } else { '' }
+            if ($deep.IsThirdParty) {
+                $line = "Optional deep dump weak evidence: faulting address$addrText mapped to third-party module $mod.$stopNote This corroborates only; it did not set or change any tier or confidence."
+                $targetClass = Get-DeepDumpModuleClass $mod
+                $matched = $false
+                foreach ($c in @($culprits)) {
+                    if (($targetClass -eq 'gpu' -and $c.TierClass -eq 'gpu') -or ($targetClass -eq 'driver' -and $c.TierClass -eq 'driver')) {
+                        $c.For = @($c.For) + $line
+                        $matched = $true
+                    }
+                }
+                if ($matched) {
+                    $notes += "Deep dump: $mod was surfaced as weak supporting evidence only; deterministic ranking stayed unchanged."
+                } else {
+                    $deepObserved += $line
+                }
+            } else {
+                $notes += "Deep dump: faulting address$addrText mapped to $mod, a generic Windows/OS module.$stopNote Deep dump did not isolate a third-party module, so this remains inconclusive."
+            }
+        } else {
+            $notes += "Deep dump: -DeepDump was requested, but the dump result was not usable (status: $($deep.Status)). This is missing module data, not clean."
+        }
+    }
+
     # ---- Optional user-reported intake (deterministic). It NEVER changes a tier or confidence - it
     #      only adds evidence lines / notes and retargets confirm steps, so every guardrail still holds
     #      (the measured signals keep driving the ranking; self-reported symptoms inform the narrative).
@@ -1412,6 +1874,7 @@ function New-Diagnosis($data) {
     # false-clean edges (Codex + workflow brainstorm). These NEVER set a tier; they are honest
     # "seen, not enough to conclude" lines, and any one of them suppresses the green clean banner.
     $observed = @()
+    foreach ($do in @($deepObserved)) { $observed += $do }
     if ($data.Whea.Readable -and $data.Whea.Total -gt 0 -and $data.Whea.Fatal -eq 0 -and ($codesPresent -notcontains '0x124')) {
         $wc = if ($data.Whea.Corrected -gt 0) { $data.Whea.Corrected } else { $data.Whea.Total }
         $observed += "Hardware-error log (WHEA): $wc non-fatal/corrected event(s) seen. Not a fault on its own (often thermal, power, or a marginal RAM/XMP overclock), but the WHEA log is NOT clean. It escalates to a hardware suspect if the count keeps climbing or a fatal WHEA appears - re-test with any XMP/EXPO profile and overclock disabled."
@@ -1455,7 +1918,7 @@ function New-Diagnosis($data) {
     # The green "came back clean" banner shows ONLY when every signal was readable AND there are no
     # culprits AND no observed weak signals - so corrected WHEA, sub-threshold storage, or update
     # failures can no longer flash "all clean". The decision lives in the scorer so it is fixture-testable.
-    $cleanBanner = $allReadable -and (@($culprits).Count -eq 0) -and (@($observed).Count -eq 0)
+    $cleanBanner = $allReadable -and (@($culprits).Count -eq 0) -and (@($observed).Count -eq 0) -and (-not $deepDumpBlocksClean)
 
     # Blind run: most of the CORE collectors could not be read, so the report must shout MISSING DATA
     # rather than imply a near-clean result (>= 3 of the 6 main signals unreadable).
@@ -1478,6 +1941,8 @@ function New-Diagnosis($data) {
         $headline = [pscustomobject]@{ Severity = 'weak'; Text = "No culprit crossed the ranking bar, but $(@($observed).Count) weak signal(s) were observed - NOT a clean bill of health." }
     } elseif ($cleanBanner) {
         $headline = [pscustomobject]@{ Severity = 'clean'; Text = 'No instability signals in the readable data this window. (Not a guarantee the PC is fine - only that the signals we could read were clean.)' }
+    } elseif ($deepDumpBlocksClean) {
+        $headline = [pscustomobject]@{ Severity = 'partial'; Text = 'No ranked culprit changed, but optional deep dump analysis did not isolate a third-party module. See notes.' }
     } else {
         $headline = [pscustomobject]@{ Severity = 'partial'; Text = 'No culprits found, but one or more checks could not be read - this is NOT a clean bill. See the notes and re-run (elevated if needed).' }
     }
@@ -1515,6 +1980,7 @@ function New-Diagnosis($data) {
         BlindRun         = $blindRun
         Readability      = $readability
         Intake           = $data.Intake
+        DeepDump         = $data.DeepDump
     }
 }
 
@@ -1539,12 +2005,8 @@ function New-RedactionMap($sys) {
     return $map
 }
 
-function Protect-Text($text, $map) {
-    if (-not $text) { return $text }
-    $t = [string]$text
-    foreach ($k in $map.Keys) { $t = $t -replace $k, $map[$k] }
-    $t = [regex]::Replace($t, '\b([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}\b', '[MAC]')
-    $ipv6Pattern = @(
+function Get-Ipv6RedactionPattern {
+    @(
         '(?i)(?<![0-9A-F:])(?:',
         '(?:[0-9A-F]{1,4}:){7}[0-9A-F]{1,4}|',
         '(?:[0-9A-F]{1,4}:){1,7}:|',
@@ -1557,7 +2019,14 @@ function Protect-Text($text, $map) {
         ':(?:(?::[0-9A-F]{1,4}){1,7}|:)',
         ')(?:%[0-9A-Z._-]+)?(?![0-9A-F:])'
     ) -join ''
-    $t = [regex]::Replace($t, $ipv6Pattern, '[IPV6]')
+}
+
+function Protect-Text($text, $map) {
+    if (-not $text) { return $text }
+    $t = [string]$text
+    foreach ($k in $map.Keys) { $t = $t -replace $k, $map[$k] }
+    $t = [regex]::Replace($t, '\b([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}\b', '[MAC]')
+    $t = [regex]::Replace($t, (Get-Ipv6RedactionPattern), '[IPV6]')
     $t = [regex]::Replace($t, '\b(\d{1,3}\.){3}\d{1,3}\b', '[IP]')
     return $t
 }
@@ -1613,7 +2082,7 @@ function Build-AiPrompt($sys, $diag, $map, $redact) {
     }
     if ($diag.UnexplainedCount -ge 1) { [void]$sb.AppendLine("Unexpected restarts with no recorded cause (Kernel-Power 41, code 0): $($diag.UnexplainedCount)") }
     if ($diag.AppCrashCount -ge 1)    { [void]$sb.AppendLine("Application-level crash events: $($diag.AppCrashCount)") }
-    foreach ($n in $diag.Notes) { [void]$sb.AppendLine("Note: $n") }
+    foreach ($n in $diag.Notes) { [void]$sb.AppendLine("Note: $(Protect-PromptValue $n)") }
     [void]$sb.AppendLine('')
     [void]$sb.AppendLine('=== RANKED CULPRITS (deterministic scorer - explain and pressure-test in order; do not reorder) ===')
     if (@($diag.Culprits).Count -eq 0) {
@@ -1641,7 +2110,7 @@ function Build-AiPrompt($sys, $diag, $map, $redact) {
     if (@($diag.RuledOut).Count -gt 0) {
         [void]$sb.AppendLine('')
         [void]$sb.AppendLine('=== ALREADY CHECKED THIS PASS (ruled out - do NOT re-recommend these without a specific new reason) ===')
-        foreach ($r in $diag.RuledOut) { [void]$sb.AppendLine(" - $r") }
+        foreach ($r in $diag.RuledOut) { [void]$sb.AppendLine(" - $(Protect-PromptValue $r)") }
     }
     # Readability footer: which signals were NOT readable this pass, so the AI treats them as unknown
     # (not clean). On a fully-readable run, say so explicitly.
@@ -1656,6 +2125,279 @@ function Build-AiPrompt($sys, $diag, $map, $redact) {
     $text = $sb.ToString()
     if ($redact) { $text = Protect-Text $text $map }
     return $text
+}
+
+# ---------------------------------------------------------------------------
+# Helper packet builder (redacted share bundle)
+# ---------------------------------------------------------------------------
+function Get-PacketStampLine($stamp) {
+    return "ToolVersion: $($stamp.ToolVersion) | KbHash: $($stamp.KbHash) | GitSha: $($stamp.GitSha)"
+}
+
+function ConvertTo-PacketSummaryText($s) {
+    $t = Protect-PromptValue $s
+    $t = [regex]::Replace($t, '(?i)clean bill of health', 'all-clear')
+    $t = [regex]::Replace($t, '(?i)clean bill', 'all-clear')
+    $t = [regex]::Replace($t, '(?i)unhealthy', 'failing')
+    $t = [regex]::Replace($t, '(?i)healthy', 'OK')
+    return $t
+}
+
+function Get-PacketTierText($t) {
+    if ($t -eq 'checklist') { return 'checklist / capture next' }
+    if ($t -eq 1) { return 'tier 1 / prime suspect' }
+    if ($t -eq 2) { return 'tier 2 / possible' }
+    return 'lead'
+}
+
+function Get-PacketDoNotDoYet($c) {
+    switch ([string]$c.TierClass) {
+        'drive'   { return 'DO NOT DO YET: Do not replace or RMA the drive until the SMART confirmation above is done. Backups are the exception: back up important data now.' }
+        'gpu'     { return 'DO NOT DO YET: Do not RMA or buy a GPU until the driver rollback/DDU or swap-test confirm step produces evidence.' }
+        'cpu'     { return 'DO NOT DO YET: Do not RMA CPU/RAM/motherboard parts until stock-settings retest, temperature, and power checks support it.' }
+        'memory'  { return 'DO NOT DO YET: Do not buy or RMA RAM until MemTest/Windows Memory Diagnostic or a stock-speed retest confirms the memory lead.' }
+        'storage' { return 'DO NOT DO YET: Do not reinstall Windows or replace storage hardware until the SMART, cable, chkdsk, or free-space confirm step points there.' }
+        'driver'  { return 'DO NOT DO YET: Do not reinstall Windows or chase hardware until a recent-driver rollback/update or device reinstall confirms this lead.' }
+        'power'   { return 'DO NOT DO YET: Do not buy a PSU or replace parts from Kernel-Power alone. Capture the next crash or confirm with the checklist first.' }
+        'capture' { return 'DO NOT DO YET: Do not change hardware yet. This card is about making the next crash readable.' }
+        'handoff' { return 'DO NOT DO YET: Do not buy or RMA parts until one reversible swap-test or physical check actually changes the symptom.' }
+        'app'     { return 'DO NOT DO YET: Do not replace PC hardware for an app-level crash. Update/reinstall the app or its driver stack first.' }
+        default   { return 'DO NOT DO YET: Do not buy parts, reinstall Windows, or change multiple variables until the confirm step above produces evidence.' }
+    }
+}
+
+function Build-HelperSummary($sys, $diag, $stamp) {
+    $sb = New-Object System.Text.StringBuilder
+    [void]$sb.AppendLine('# Second Opinion helper summary')
+    [void]$sb.AppendLine('')
+    [void]$sb.AppendLine((Get-PacketStampLine $stamp))
+    [void]$sb.AppendLine('Packet redaction: share-safe; local report.html is not included.')
+    [void]$sb.AppendLine('')
+    [void]$sb.AppendLine('## Redacted case identifiers')
+    [void]$sb.AppendLine("- Computer: $(Protect-PromptValue $sys.ComputerName)")
+    [void]$sb.AppendLine("- User: $(Protect-PromptValue $sys.UserName)")
+    [void]$sb.AppendLine("- BIOS serial: $(Protect-PromptValue $sys.BiosSerial)")
+    [void]$sb.AppendLine('')
+    [void]$sb.AppendLine('## Redacted system snapshot')
+    [void]$sb.AppendLine("- OS: $(Protect-PromptValue $sys.OS) build $($sys.OSBuild)")
+    [void]$sb.AppendLine("- Machine: $(Protect-PromptValue $sys.Manufacturer) $(Protect-PromptValue $sys.Model)")
+    [void]$sb.AppendLine("- CPU: $(Protect-PromptValue $sys.CPU)")
+    if ($sys.Gpu) { [void]$sb.AppendLine("- GPU: $(Protect-PromptValue $sys.Gpu)") }
+    [void]$sb.AppendLine("- RAM: $($sys.RAMGB) GB")
+    [void]$sb.AppendLine('')
+    [void]$sb.AppendLine('## Bottom line')
+    if ($diag.Headline) {
+        [void]$sb.AppendLine((ConvertTo-PacketSummaryText $diag.Headline.Text))
+    } else {
+        [void]$sb.AppendLine('No deterministic headline was available. Treat this as missing packet data, not an all-clear.')
+    }
+    [void]$sb.AppendLine('')
+    [void]$sb.AppendLine('## Ranked culprits')
+    if (@($diag.Culprits).Count -eq 0) {
+        [void]$sb.AppendLine('No ranked culprit crossed the bar in the readable data. This is not an all-clear; check unreadable signals and capture the next crash.')
+    } else {
+        $rank = 1
+        foreach ($c in @($diag.Culprits)) {
+            [void]$sb.AppendLine("$rank. $(ConvertTo-PacketSummaryText $c.Title)")
+            [void]$sb.AppendLine("   - Tier: $(Get-PacketTierText $c.Tier)")
+            [void]$sb.AppendLine("   - Confidence: $([string]$c.Confidence)")
+            $forLines = @($c.For) | Select-Object -First 2
+            if (@($forLines).Count -gt 0) {
+                foreach ($f in $forLines) { [void]$sb.AppendLine("   - For: $(ConvertTo-PacketSummaryText $f)") }
+            } else {
+                [void]$sb.AppendLine('   - For: no positive evidence line captured.')
+            }
+            $againstLines = @($c.Against) | Select-Object -First 2
+            if (@($againstLines).Count -gt 0) {
+                foreach ($a in $againstLines) { [void]$sb.AppendLine("   - Against: $(ConvertTo-PacketSummaryText $a)") }
+            } else {
+                [void]$sb.AppendLine('   - Against: no counter-signal captured.')
+            }
+            [void]$sb.AppendLine("   - Confirm next: $(ConvertTo-PacketSummaryText $c.ConfirmBy)")
+            [void]$sb.AppendLine("   - $(ConvertTo-PacketSummaryText (Get-PacketDoNotDoYet $c))")
+            $rank++
+        }
+    }
+    [void]$sb.AppendLine('')
+    [void]$sb.AppendLine('## Observed weak signals')
+    if (@($diag.Observed).Count -gt 0) {
+        foreach ($o in @($diag.Observed)) { [void]$sb.AppendLine("- $(ConvertTo-PacketSummaryText $o)") }
+    } else {
+        [void]$sb.AppendLine('None recorded below the ranking threshold.')
+    }
+    [void]$sb.AppendLine('')
+    [void]$sb.AppendLine('## Next-crash checklist')
+    [void]$sb.AppendLine('- Note the wall-clock time of the next crash or freeze.')
+    [void]$sb.AppendLine('- Photograph any stop code before the machine restarts.')
+    [void]$sb.AppendLine('- Check whether a new minidump appears in C:\Windows\Minidump.')
+    [void]$sb.AppendLine('- Re-run Second Opinion, preferably elevated, before changing more variables.')
+    [void]$sb.AppendLine('- Change only one thing at a time so the next run can explain what changed.')
+    [void]$sb.AppendLine('')
+    [void]$sb.AppendLine('## Signals this packet could not read')
+    $unread = @($diag.Readability | Where-Object { -not $_.Readable } | ForEach-Object { $_.Signal })
+    if (@($unread).Count -gt 0) {
+        foreach ($u in $unread) { [void]$sb.AppendLine("- $(ConvertTo-PacketSummaryText $u)") }
+    } else {
+        [void]$sb.AppendLine('All configured signals were readable this pass.')
+    }
+    return $sb.ToString()
+}
+
+function Build-RedactedEvidenceJson($sys, $diag, $stamp) {
+    $culprits = @()
+    foreach ($c in @($diag.Culprits)) {
+        $culprits += [ordered]@{
+            Title      = [string]$c.Title
+            TierClass  = [string]$c.TierClass
+            Tier       = $c.Tier
+            Confidence = [string]$c.Confidence
+            For        = @($c.For)
+            Against    = @($c.Against)
+            ConfirmBy  = [string]$c.ConfirmBy
+            DoNotDoYet = Get-PacketDoNotDoYet $c
+        }
+    }
+    $readability = @()
+    foreach ($r in @($diag.Readability)) {
+        $readability += [ordered]@{
+            Signal   = [string]$r.Signal
+            Readable = [bool]$r.Readable
+        }
+    }
+    $evidence = [ordered]@{
+        SchemaVersion = '1.0'
+        VersionStamp  = [ordered]@{
+            ToolVersion = [string]$stamp.ToolVersion
+            KbHash      = [string]$stamp.KbHash
+            GitSha      = [string]$stamp.GitSha
+        }
+        CaseIdentifiers = [ordered]@{
+            ComputerName = [string]$sys.ComputerName
+            UserName     = [string]$sys.UserName
+            BiosSerial   = [string]$sys.BiosSerial
+        }
+        System = [ordered]@{
+            OS           = [string]$sys.OS
+            OSBuild      = [string]$sys.OSBuild
+            Manufacturer = [string]$sys.Manufacturer
+            Model        = [string]$sys.Model
+            CPU          = [string]$sys.CPU
+            GPU          = [string]$sys.Gpu
+            RAMGB        = [int]$sys.RAMGB
+            IsElevated   = [bool]$sys.IsElevated
+        }
+        Headline = [ordered]@{
+            Severity = if ($diag.Headline) { [string]$diag.Headline.Severity } else { '' }
+            Text     = if ($diag.Headline) { [string]$diag.Headline.Text } else { '' }
+        }
+        Counts = [ordered]@{
+            CrashCount       = [int]$diag.CrashCount
+            DistinctCodes    = [int]$diag.DistinctCodes
+            UnexplainedCount = [int]$diag.UnexplainedCount
+            AppCrashCount    = [int]$diag.AppCrashCount
+            AllReadable      = [bool]$diag.AllReadable
+            BlindRun         = [bool]$diag.BlindRun
+        }
+        Culprits    = @($culprits)
+        RuledOut    = @($diag.RuledOut)
+        Observed    = @($diag.Observed)
+        Readability = @($readability)
+    }
+    return ($evidence | ConvertTo-Json -Depth 8)
+}
+
+function Build-UnreadableSignalsText($diag, $stamp) {
+    $sb = New-Object System.Text.StringBuilder
+    [void]$sb.AppendLine('Second Opinion unreadable signals')
+    [void]$sb.AppendLine((Get-PacketStampLine $stamp))
+    [void]$sb.AppendLine('')
+    $unread = @($diag.Readability | Where-Object { -not $_.Readable })
+    if (@($unread).Count -gt 0) {
+        [void]$sb.AppendLine('Signals NOT readable this pass:')
+        foreach ($r in $unread) { [void]$sb.AppendLine("- $(Protect-PromptValue $r.Signal)") }
+        [void]$sb.AppendLine('')
+        [void]$sb.AppendLine('Treat each one as unknown, not clean. Re-run elevated if practical.')
+    } else {
+        [void]$sb.AppendLine('All configured signals were readable this pass.')
+    }
+    return $sb.ToString()
+}
+
+function Get-RegexMatchCount($text, $pattern) {
+    return ([regex]::Matches([string]$text, [string]$pattern)).Count
+}
+
+function Get-RedactionAuditCounts($rawTexts, $map) {
+    $all = (@($rawTexts) -join "`n")
+    $counts = [ordered]@{
+        Hostnames = 0
+        Usernames = 0
+        Serials   = 0
+        Macs      = 0
+        IPv4      = 0
+        IPv6      = 0
+    }
+    foreach ($k in @($map.Keys)) {
+        $v = [string]$map[$k]
+        if ($v.StartsWith('[HOST_')) { $counts.Hostnames += Get-RegexMatchCount $all $k }
+        elseif ($v.StartsWith('[USER_')) { $counts.Usernames += Get-RegexMatchCount $all $k }
+        elseif ($v.StartsWith('[SERIAL_')) { $counts.Serials += Get-RegexMatchCount $all $k }
+    }
+    $macPattern = '\b([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}\b'
+    $counts.Macs = Get-RegexMatchCount $all $macPattern
+    $withoutMac = [regex]::Replace($all, $macPattern, ' ')
+    $ipv6Pattern = Get-Ipv6RedactionPattern
+    $counts.IPv6 = Get-RegexMatchCount $withoutMac $ipv6Pattern
+    $withoutIpv6 = [regex]::Replace($withoutMac, $ipv6Pattern, ' ')
+    $counts.IPv4 = Get-RegexMatchCount $withoutIpv6 '\b(\d{1,3}\.){3}\d{1,3}\b'
+    return [pscustomobject]$counts
+}
+
+function Build-RedactionAuditText($counts, $stamp) {
+    $sb = New-Object System.Text.StringBuilder
+    [void]$sb.AppendLine('Second Opinion redaction audit')
+    [void]$sb.AppendLine((Get-PacketStampLine $stamp))
+    [void]$sb.AppendLine('')
+    [void]$sb.AppendLine('This audit lists categories and counts only. It does not print masked values.')
+    [void]$sb.AppendLine('')
+    [void]$sb.AppendLine("Hostnames masked: $($counts.Hostnames)")
+    [void]$sb.AppendLine("Usernames masked: $($counts.Usernames)")
+    [void]$sb.AppendLine("Serials masked: $($counts.Serials)")
+    [void]$sb.AppendLine("MAC addresses masked: $($counts.Macs)")
+    [void]$sb.AppendLine("IPv4 addresses masked: $($counts.IPv4)")
+    [void]$sb.AppendLine("IPv6 addresses masked: $($counts.IPv6)")
+    return $sb.ToString()
+}
+
+function New-HelperPacketArtifacts($sys, $diag, $map, $stamp) {
+    if (-not $map) { $map = New-RedactionMap $sys }
+    if (-not $stamp) { $stamp = Get-SoVersionStamp }
+    $rawSummary = Build-HelperSummary $sys $diag $stamp
+    $rawEvidence = Build-RedactedEvidenceJson $sys $diag $stamp
+    $rawUnreadable = Build-UnreadableSignalsText $diag $stamp
+    $counts = Get-RedactionAuditCounts @($rawSummary, $rawEvidence, $rawUnreadable) $map
+    $rawAudit = Build-RedactionAuditText $counts $stamp
+    $artifacts = [ordered]@{}
+    $artifacts['helper-summary.md'] = Protect-Text $rawSummary $map
+    $artifacts['redacted-evidence.json'] = Protect-Text $rawEvidence $map
+    $artifacts['redaction-audit.txt'] = Protect-Text $rawAudit $map
+    $artifacts['unreadable-signals.txt'] = Protect-Text $rawUnreadable $map
+    return $artifacts
+}
+
+function Write-HelperPacket($OutDir, $sys, $diag, $map) {
+    $packetDir = Join-Path $OutDir 'packet'
+    New-Item -ItemType Directory -Force -Path $packetDir | Out-Null
+    $stamp = Get-SoVersionStamp
+    $artifacts = New-HelperPacketArtifacts $sys $diag $map $stamp
+    foreach ($name in $artifacts.Keys) {
+        Set-Content -LiteralPath (Join-Path $packetDir $name) -Value $artifacts[$name] -Encoding UTF8
+    }
+    [pscustomobject]@{
+        PacketDir = $packetDir
+        Artifacts = @($artifacts.Keys)
+        Stamp     = $stamp
+    }
 }
 
 # ---------------------------------------------------------------------------
@@ -1846,6 +2588,11 @@ $since = (Get-Date).AddDays(-$Days)
 $sys = Get-SystemSummary
 
 $crashSig = Get-CrashEvents $since
+$deepDumpSig = $null
+if ($DeepDump) {
+    Write-Host 'Checking crash dump metadata (read-only, optional)...' -ForegroundColor Cyan
+    $deepDumpSig = Get-DeepDumpResult $crashSig.Items
+}
 $driveSig = Get-DriveHealth
 $volSig   = Get-VolumeInfo
 $devSig   = Get-ProblemDevices
@@ -1889,6 +2636,7 @@ $data = [pscustomobject]@{
     RamSpeed             = $sys.RamSpeed
     RamRatedSpeed        = $sys.RamRatedSpeed
     Intake               = $intake
+    DeepDump             = $deepDumpSig
 }
 
 $diag = New-Diagnosis $data
@@ -1915,9 +2663,15 @@ if (-not $redact) {
 $map = New-RedactionMap $sys
 $prompt = Build-AiPrompt $sys $diag $map $redact
 Set-Content -Path $promptPath -Value $prompt -Encoding UTF8
+$packetInfo = $null
+if ($HelperPacket) {
+    $packetInfo = Write-HelperPacket $OutDir $sys $diag $map
+}
 
 Write-Host ''
 Write-Host ("  {0} system crash(es), {1} unexplained restart(s), {2} culprit(s) ranked." -f $diag.CrashCount, $diag.UnexplainedCount, @($diag.Culprits).Count)
+if ($DeepDump) { Write-Host ("  Deep dump: {0}" -f $diag.DeepDump.Status) }
 Write-Host "  Report:  $reportPath" -ForegroundColor Green
 Write-Host "  Prompt:  $promptPath  (redacted: $redact)" -ForegroundColor Green
+if ($packetInfo) { Write-Host "  Packet:  $($packetInfo.PacketDir)  (always redacted)" -ForegroundColor Green }
 if ($OpenReport) { Invoke-Safe { Start-Process $reportPath } | Out-Null }
