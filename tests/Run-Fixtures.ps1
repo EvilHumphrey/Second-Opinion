@@ -552,6 +552,14 @@ $bccOver    = $null; try { $bccOver    = ConvertTo-BugcheckCodeString '999999999
 $bccDec     = $null; try { $bccDec     = ConvertTo-BugcheckCodeString '26' $true } catch { $bccDec = 'THREW' }
 $bccHex     = $null; try { $bccHex     = ConvertTo-BugcheckCodeString '0x116' $true } catch { $bccHex = 'THREW' }
 $bccZero    = $null; try { $bccZero    = ConvertTo-BugcheckCodeString '0' $true } catch { $bccZero = 'THREW' }
+# Audit P3-1: the GPU driver node's drive-clean against-line must be QUALIFIED when detailed SMART was unreadable
+# (the gpu-failure-01/gpu-failure-01 case: rollup Healthy, per-drive SMART not readable) - matching the report's
+# "not a clean bill" note, not an unqualified "drives look clean".
+$p31Gpu = @($diags['gpu-failure-01'].Culprits | Where-Object { $_.TierClass -eq 'gpu' }) | Select-Object -First 1
+$p31GpuAgainst = (@($p31Gpu.Against) -join ' ')
+# Audit P3-2: a valid IPv4 still masks to [IP], but a dotted-quad with an out-of-range (>255) segment - a
+# version/driver string, not an address - is left intact (no over-redaction; the pattern cannot under-mask a real IP).
+$verRedact = Protect-Text 'driver 1.2.300.4 build and ip 192.168.1.42 here' $redMap
 $redChecks = @(
     @{ N = 'redaction: Protect-Text masks hostname / username / BIOS serial and leaves placeholders'; C = { ($redDone -notmatch 'DESKTOP-RED01') -and ($redDone -notmatch 'redacted_user') -and ($redDone -notmatch 'SN-REDACT-77') -and ($redDone -match '\[HOST_1\]') -and ($redDone -match '\[USER_1\]') -and ($redDone -match '\[SERIAL_1\]') } }
     @{ N = 'redaction: a junk/default BIOS serial is NOT mapped (no false [SERIAL_1])'; C = { $j = New-RedactionMap ([pscustomobject]@{ UserName = 'u'; ComputerName = 'h'; BiosSerial = 'To Be Filled By O.E.M.' }); -not (@($j.Values) -contains '[SERIAL_1]') } }
@@ -568,6 +576,8 @@ $redChecks = @(
     @{ N = 'robustness (audit P2-2): ConvertTo-BugcheckCodeString returns null (no throw) on a non-numeric code'; C = { $null -eq $bccHostile } }
     @{ N = 'robustness (audit P2-2): returns null (no throw) on an Int64-overflowing all-digit code'; C = { $null -eq $bccOver } }
     @{ N = 'robustness (audit P2-2): still parses valid decimal (26->0x1A) + hex (0x116), and 0 stays null'; C = { ($bccDec -eq '0x1A') -and ($bccHex -ne 'THREW') -and ($null -ne $bccHex) -and ($null -eq $bccZero) } }
+    @{ N = 'honest-abstention (audit P3-1): GPU against-line is qualified when detailed SMART is unreadable (no bare ''look clean'')'; C = { $p31Gpu -and ($p31GpuAgainst -match 'detailed SMART was not readable') -and ($p31GpuAgainst -notmatch 'Drive health and the hardware-error log look clean') } }
+    @{ N = 'redaction (audit P3-2): a >255-segment dotted value (a version) is left intact, but a real IPv4 still masks'; C = { ($verRedact -match '1\.2\.300\.4') -and ($verRedact -notmatch '192\.168\.1\.42') -and ($verRedact -match '\[IP\]') } }
 )
 foreach ($rc in $redChecks) {
     $ok = $false

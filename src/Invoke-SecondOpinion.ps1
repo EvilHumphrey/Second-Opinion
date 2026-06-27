@@ -1648,7 +1648,18 @@ function New-Diagnosis($data) {
         # Only claim drives/WHEA "look clean" when those reads actually SUCCEEDED - an empty drive list
         # or a 0 WHEA total also occur when the read FAILED, which would falsely reassure (verify-pass leak).
         $driveEventLogsClean = ([bool]$storageCorroborators.Readable -and [int]$storageCorroborators.Count -eq 0 -and [bool]$smartPredictiveFailures.Readable -and [int]$smartPredictiveFailures.Count -eq 0)
-        if ($data.DrivesReadable -and $data.Whea.Readable -and $driveEventLogsClean -and $badDrives.Count -eq 0 -and $data.Whea.Total -eq 0) { $against += 'Drive health and the hardware-error log look clean - this points at the driver/GPU rather than a failing drive or CPU underneath.' }
+        # P3-1 (audit): the unqualified "drives look clean" must appear only when DETAILED SMART was actually read.
+        # On a non-elevated run the rollup reads Healthy but per-drive SMART is unreadable, and the report's
+        # drive-health note already says "detailed SMART not readable - not a clean bill"; this against-line was
+        # gated only on the rollup + WHEA, so it could contradict that note. Match the note's honesty.
+        $detailedSmartRead = (@($data.Drives | Where-Object { -not $_.ReliabilityReadable }).Count -eq 0)
+        if ($data.DrivesReadable -and $data.Whea.Readable -and $driveEventLogsClean -and $badDrives.Count -eq 0 -and $data.Whea.Total -eq 0) {
+            if ($detailedSmartRead) {
+                $against += 'Drive health and the hardware-error log look clean - this points at the driver/GPU rather than a failing drive or CPU underneath.'
+            } else {
+                $against += 'The hardware-error log is clean and drive SMART status reads Healthy at the level checked (detailed SMART was not readable this run), so this points at the driver/GPU rather than a confirmed failing drive or CPU underneath.'
+            }
+        }
         $tier = if ($conf -eq 'High') { 1 } else { 2 }
         $gpuModel = [string]$data.GpuModel
         $gpuTitle  = if ($gpuModel) { "GPU display driver ($gpuModel)" } else { 'GPU display driver' }
@@ -2387,13 +2398,20 @@ function Get-Ipv6RedactionPattern {
     ) -join ''
 }
 
+function Get-Ipv4RedactionPattern {
+    # Match only a VALID dotted-quad (each octet 0-255) so a 4-segment value with an out-of-range segment - e.g. a
+    # driver/version like '1.2.300.4' - is not over-masked to [IP]. Tighter than \d{1,3} but still masks every real
+    # IPv4 (octets are 0-255 by definition), so it can never under-mask a real address / reintroduce a leak. (Audit P3-2.)
+    '\b(25[0-5]|2[0-4]\d|[01]?\d\d?)(\.(25[0-5]|2[0-4]\d|[01]?\d\d?)){3}\b'
+}
+
 function Protect-Text($text, $map) {
     if (-not $text) { return $text }
     $t = [string]$text
     foreach ($k in $map.Keys) { $t = $t -replace $k, $map[$k] }
     $t = [regex]::Replace($t, '\b([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}\b', '[MAC]')
     $t = [regex]::Replace($t, (Get-Ipv6RedactionPattern), '[IPV6]')
-    $t = [regex]::Replace($t, '\b(\d{1,3}\.){3}\d{1,3}\b', '[IP]')
+    $t = [regex]::Replace($t, (Get-Ipv4RedactionPattern), '[IP]')
     return $t
 }
 
@@ -3092,7 +3110,7 @@ function Get-RedactionAuditCounts($rawTexts, $map) {
     $ipv6Pattern = Get-Ipv6RedactionPattern
     $counts.IPv6 = Get-RegexMatchCount $withoutMac $ipv6Pattern
     $withoutIpv6 = [regex]::Replace($withoutMac, $ipv6Pattern, ' ')
-    $counts.IPv4 = Get-RegexMatchCount $withoutIpv6 '\b(\d{1,3}\.){3}\d{1,3}\b'
+    $counts.IPv4 = Get-RegexMatchCount $withoutIpv6 (Get-Ipv4RedactionPattern)
     return [pscustomobject]$counts
 }
 
