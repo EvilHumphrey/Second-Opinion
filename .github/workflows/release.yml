@@ -1,0 +1,90 @@
+name: release
+
+# Cut a release by pushing a version tag, e.g.:  git tag v0.4.0 && git push --tags
+# (A bare tag push does NOT create a GitHub Release by itself - the "Publish" step below
+# creates it if absent, or just attaches the assets if you pre-made it in the UI.)
+on:
+  push:
+    tags:
+      - 'v*'
+
+# gh release create/upload writes to the repo's Releases.
+permissions:
+  contents: write
+
+jobs:
+  package:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Build the named ZIP + checksum on Windows so the bundled .cmd / .ps1 keep their native
+      # line endings, using only built-in PowerShell (Compress-Archive, Get-FileHash).
+      - name: Build SecondOpinion-<tag>.zip + SHA256SUMS.txt
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tag = $env:GITHUB_REF_NAME           # the tag that triggered this run, e.g. v0.4.0
+          $zip = "SecondOpinion-$tag.zip"
+
+          # Stage exactly the three files a non-technical helper needs. Keep Invoke-SecondOpinion.ps1
+          # under src\ so the bundled "Run Second Opinion.cmd" - which launches
+          # %~dp0src\Invoke-SecondOpinion.ps1 - works on a plain double-click after Extract All.
+          $stage = Join-Path $env:RUNNER_TEMP 'pkg'
+          if (Test-Path $stage) { Remove-Item $stage -Recurse -Force }
+          New-Item -ItemType Directory -Force -Path (Join-Path $stage 'src') | Out-Null
+          Copy-Item 'src\Invoke-SecondOpinion.ps1' (Join-Path $stage 'src') -Force
+          Copy-Item 'Run Second Opinion.cmd'       $stage -Force
+          Copy-Item 'README.md'                    $stage -Force
+
+          # "$stage\*" puts the files at the ZIP root (no redundant top folder), so Windows
+          # "Extract All" yields one clean SecondOpinion-<tag>\ folder, not a double-nested one.
+          Compress-Archive -Path (Join-Path $stage '*') -DestinationPath $zip -Force
+
+          # Canonical sha256sum line: "<lowercase-hex>  <filename>" (two spaces), LF-terminated,
+          # so it verifies with Get-FileHash on Windows and `sha256sum -c` anywhere else.
+          $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $zip).Hash.ToLower()
+          $line = "$hash  $zip`n"
+          [System.IO.File]::WriteAllText("$PWD\SHA256SUMS.txt", $line, (New-Object System.Text.UTF8Encoding($false)))
+
+          Write-Host "Built $zip"
+          Get-Content SHA256SUMS.txt
+
+      # Attach both assets to the tag's GitHub Release, creating the Release if the tag push
+      # didn't already make one. Idempotent and re-runnable (--clobber overwrites stale assets).
+      - name: Publish assets to the GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = $env:GITHUB_REF_NAME
+          $zip = "SecondOpinion-$tag.zip"
+
+          # Friendly default release notes, written for --notes-file. Built as an indented string
+          # array, NOT a here-string: a here-string's column-0 body and closing "@ would end this
+          # YAML "run: |" block early. The 4-space-indented element renders as a code block on GitHub;
+          # "" elements are blank lines between paragraphs.
+          $notes = @(
+            "**Second Opinion $tag** - read-only Windows crash triage. It changes nothing on the machine.",
+            "",
+            "Download **$zip** below, **Extract All**, then double-click **Run Second Opinion.cmd**.",
+            "The ZIP contains that launcher, src/Invoke-SecondOpinion.ps1, and the README.",
+            "",
+            "**Verify your download (optional).** SHA256SUMS.txt holds the SHA-256 of the ZIP. In PowerShell:",
+            "",
+            "    Get-FileHash $zip -Algorithm SHA256",
+            "",
+            'and confirm the printed hash matches the line in SHA256SUMS.txt. The README''s',
+            '"Verify your download" section has a copy-paste one-liner that does the check for you.'
+          ) -join "`n"
+          Set-Content -Path notes.md -Value $notes -Encoding utf8
+
+          # Create the Release if it doesn't exist yet. If it already exists (a tag push that the
+          # maintainer pre-published, or a re-run), this errors harmlessly and we fall through to
+          # the upload, leaving any maintainer-authored notes in place.
+          try { gh release create $tag --title "Second Opinion $tag" --notes-file notes.md } catch { }
+          $global:LASTEXITCODE = 0
+
+          # The real gate: (re)attach both assets. If the Release genuinely doesn't exist (create
+          # failed for a real reason), this fails loudly and the job goes red.
+          gh release upload $tag $zip SHA256SUMS.txt --clobber
