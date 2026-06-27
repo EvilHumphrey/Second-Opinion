@@ -2350,7 +2350,13 @@ function New-RedactionMap($sys) {
     Add-NameRedaction $map $sys.ComputerName '[HOST_1]'
     $serial = [string]$sys.BiosSerial
     if ($serial.Trim() -ne '' -and $serial -notmatch 'To Be Filled|Default string|System Serial|^0+$') {
-        $map[[regex]::Escape($serial)] = '[SERIAL_1]'
+        # Whitespace-tolerant: helper-summary.md prints the serial through Protect-PromptValue (which collapses
+        # every whitespace/control run to one space), but redacted-evidence.json carries it raw with interior
+        # padding. A pattern escaped from the RAW serial misses the normalized form, so a multi-space/tab serial
+        # leaked in cleartext into the share-safe packet (audit P1-1). Split on whitespace, escape each token,
+        # and rejoin with a whitespace-class pattern so it matches BOTH forms (also fixes the redaction-audit count).
+        $tokens = @($serial.Trim() -split '\s+' | Where-Object { $_ -ne '' } | ForEach-Object { [regex]::Escape($_) })
+        if (@($tokens).Count -gt 0) { $map[($tokens -join '\s+')] = '[SERIAL_1]' }
     }
     return $map
 }

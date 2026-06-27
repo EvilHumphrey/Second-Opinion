@@ -533,6 +533,13 @@ $tinyUserMap = New-RedactionMap ([pscustomobject]@{ UserName = 'al'; ComputerNam
 $tinyUserDone = Protect-Text 'algorithm notes by al in alpha builds' $tinyUserMap
 $oneCharMap = New-RedactionMap ([pscustomobject]@{ UserName = 'a'; ComputerName = 'PC'; BiosSerial = '' })
 $oneCharDone = Protect-Text 'a crash on a machine with a dump' $oneCharMap
+# Audit P1-1: a BIOS serial with INTERIOR whitespace/tab must mask in BOTH the raw form (redacted-evidence.json)
+# AND the Protect-PromptValue-normalized form (helper-summary.md, whitespace collapsed). The pre-fix raw-escaped
+# pattern matched only the raw form, so a multi-space serial leaked cleartext into the share-safe packet.
+$wsSerial    = "SN  REDACT`t88"
+$wsSerialMap = New-RedactionMap ([pscustomobject]@{ UserName = 'u'; ComputerName = 'h'; BiosSerial = $wsSerial })
+$wsRawDone   = Protect-Text "serial=$wsSerial end" $wsSerialMap
+$wsNormDone  = Protect-Text "serial=$(Protect-PromptValue $wsSerial) end" $wsSerialMap
 $redChecks = @(
     @{ N = 'redaction: Protect-Text masks hostname / username / BIOS serial and leaves placeholders'; C = { ($redDone -notmatch 'DESKTOP-RED01') -and ($redDone -notmatch 'redacted_user') -and ($redDone -notmatch 'SN-REDACT-77') -and ($redDone -match '\[HOST_1\]') -and ($redDone -match '\[USER_1\]') -and ($redDone -match '\[SERIAL_1\]') } }
     @{ N = 'redaction: a junk/default BIOS serial is NOT mapped (no false [SERIAL_1])'; C = { $j = New-RedactionMap ([pscustomobject]@{ UserName = 'u'; ComputerName = 'h'; BiosSerial = 'To Be Filled By O.E.M.' }); -not (@($j.Values) -contains '[SERIAL_1]') } }
@@ -542,6 +549,8 @@ $redChecks = @(
     @{ N = 'redaction: a 3-char username masks only whole words, never ordinary prose substrings'; C = { ($shortUserDone -match 'samples in the sample folder') -and ($shortUserDone -notmatch '\[USER_1\]ples') -and ($shortUserDone -match 'C:\\Users\\\[USER_1\]') } }
     @{ N = 'redaction: a 2-char username masks the whole token but NOT prose substrings (share-safe packet)'; C = { $tinyUserDone -eq 'algorithm notes by [USER_1] in alpha builds' } }
     @{ N = 'redaction: a 1-char username is too short to map and does not shred ordinary prose'; C = { $oneCharDone -eq 'a crash on a machine with a dump' } }
+    @{ N = 'redaction (audit P1-1): a BIOS serial with interior whitespace/tab masks in the RAW form (evidence JSON)'; C = { ($wsRawDone -match '\[SERIAL_1\]') -and ($wsRawDone -notmatch 'REDACT') } }
+    @{ N = 'redaction (audit P1-1): the same serial masks in the Protect-PromptValue-NORMALIZED form (helper-summary)'; C = { ($wsNormDone -match '\[SERIAL_1\]') -and ($wsNormDone -notmatch 'REDACT') } }
 )
 foreach ($rc in $redChecks) {
     $ok = $false
