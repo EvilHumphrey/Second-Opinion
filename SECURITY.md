@@ -18,11 +18,11 @@ public issue** — that would leak exactly what this tool is trying to protect.
 
 ## Artifact safety
 
-- `report.html` is **unredacted** (it shows the PC name and hardware). Share it only with the person helping
-  you, never publicly — not on a forum, in a chat, or as a screenshot.
-- **Share-safe artifacts** (best-effort redacted): `ai-prompt.txt`, and the `out\packet\` files from
-  `-HelperPacket` (`helper-summary.md`, `redacted-evidence.json`, `redaction-audit.txt`,
-  `unreadable-signals.txt`). Use these for public help / AI / forums. There is no redacted HTML report yet.
-- **Don't post publicly:** `report.html`, the whole `out` folder, or screenshots of `report.html`.
+- The top-level `out\report.html` is **unredacted** (it shows the PC name and hardware). Share it only with the
+  person helping you, never publicly — not on a forum, in a chat, or as a screenshot.
+- **Share-safe artifacts** (best-effort redacted): `ai-prompt.txt`, and the `-HelperPacket` bundle in
+  `out\packet\` — a redacted `report.html`, plus `helper-summary.md`, `redacted-evidence.json`,
+  `redaction-audit.txt`, `unreadable-signals.txt`. Use these for public help / AI / forums.
+- **Don't post publicly:** the top-level `out\report.html`, the whole `out` folder, or screenshots of it.
 - The tool never writes outside the output folder you choose (default `.\out`) and never touches Windows
   settings, the registry, services, or drivers.

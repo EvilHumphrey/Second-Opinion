@@ -113,6 +113,16 @@ the full read surface auditable up front. The manifest is a curated list (`Get-S
 harness drift-guard that cross-checks the `Win32_*` classes the collectors actually query and asserts every
 major read surface + switch-gated read is named, so it cannot silently drift from the code.
 
+## Optional share-safe redacted report (`-HelperPacket`)
+The default `out\report.html` is unredacted (local / helper-only). With `-HelperPacket`, the bundle also gets a
+**redacted `out\packet\report.html`**: `Render-Html`'s redact mode masks host / user / serial (the map) +
+MAC / IPv4 / IPv6 + `\Users\` profile paths (a `Protect-Text` backstop over the assembled HTML) and renders the
+drives table **name-free** (Media + size) - a drive FriendlyName is a user-set external-drive label the map
+cannot know. Acceptable hardware detail (Manufacturer / Model / CPU / GPU) is kept so a helper can still
+diagnose. It is the redaction-arc capstone - the redaction primitive + the sink-level hardening made a fully
+share-safe visual report tractable + testable (the redacted-HTML leak-test). Best-effort, not a guarantee; the
+default local report is byte-unchanged.
+
 ## Deliberately OUT of v0 (swamps that look easy)
 - **Native CPU/GPU temps** — no reliable native API; the real path is a signed kernel driver,
   which breaks the read-only promise. Use indirect signals (WHEA events, KP41 clustering, and the opt-in

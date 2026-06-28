@@ -3197,6 +3197,9 @@ function New-HelperPacketArtifacts($sys, $diag, $map, $stamp) {
     if ($rawDiff) { $artifacts['baseline-diff.md'] = Protect-Text $rawDiff $map }
     $artifacts['redaction-audit.txt'] = Protect-Text $rawAudit $map
     $artifacts['unreadable-signals.txt'] = Protect-Text $rawUnreadable $map
+    # B3: a redacted, share-safe report.html for the packet - Render-Html's redact mode (name-free drives +
+    # host/user/serial/MAC/IP/path masking, hardware kept). The top-level out/report.html stays unredacted.
+    $artifacts['report.html'] = Render-Html $sys $diag $map $true
     return $artifacts
 }
 
@@ -3227,7 +3230,7 @@ function Get-TierLabel($t) {
 }
 function Get-ConfClass($c) { switch ($c) { 'High' { 'c-high' } 'Medium' { 'c-med' } 'Low' { 'c-low' } default { 'c-ins' } } }
 
-function Render-Html($sys, $diag) {
+function Render-Html($sys, $diag, $map = $null, $redact = $false) {
     $genTime = (Get-Date).ToString('yyyy-MM-dd HH:mm')
     $elev = if ($sys.IsElevated) { 'elevated' } else { 'standard (some detailed SMART/device data needs elevation)' }
 
@@ -3293,7 +3296,11 @@ td.k{color:var(--muted);width:42%}
     [void]$sb.AppendLine('<h1>Second Opinion</h1>')
     [void]$sb.AppendLine("<p class=""sub"">$(ConvertTo-HtmlText $sys.ComputerName) &middot; last $Days days &middot; generated $genTime &middot; run $elev</p>")
     [void]$sb.AppendLine('<div class="badges"><span class="badge b-green">read-only &middot; nothing changed</span><span class="badge b-blue">ai-prompt.txt &middot; key identifiers removed</span></div>')
-    [void]$sb.AppendLine('<div class="note">Sharing note: this report (report.html) is NOT redacted - it shows your PC name and hardware, so share it only with the person helping you. For public help or pasting into an AI, use the redacted packet <span class="mono">out\ai-prompt.txt</span> (or <span class="mono">out\packet\</span> from -HelperPacket) instead - key identifiers removed best-effort, not guaranteed.</div>')
+    if ($redact) {
+        [void]$sb.AppendLine('<div class="note">This is the REDACTED, share-safe report - key identifiers (PC name, user, serial, network addresses, profile paths) are removed on a best-effort basis (not guaranteed); hardware models are kept so a helper can still diagnose. Safe to share for help. The full local <span class="mono">report.html</span> is unredacted.</div>')
+    } else {
+        [void]$sb.AppendLine('<div class="note">Sharing note: this report (report.html) is NOT redacted - it shows your PC name and hardware, so share it only with the person helping you. For public help or pasting into an AI, use the redacted packet <span class="mono">out\ai-prompt.txt</span> (or <span class="mono">out\packet\</span> from -HelperPacket) instead - key identifiers removed best-effort, not guaranteed.</div>')
+    }
 
     # Headline - the deterministic bottom line, styled by severity (clean=green, blind/suspect=amber
     # warning, weak/possible/partial=blue). Never "your PC is healthy"; a blind run shouts MISSING DATA.
@@ -3384,14 +3391,27 @@ td.k{color:var(--muted);width:42%}
         [void]$sb.AppendLine('<div class="section-label">Drives</div><div class="card"><table>')
         foreach ($d in $script:LastDrives) {
             $wear = if ($null -ne $d.Wear) { "$($d.Wear)% wear" } elseif (-not $d.ReliabilityReadable) { 'detailed SMART not exposed' } else { 'wear n/a' }
-            [void]$sb.AppendLine("<tr><td class=""k"">$(ConvertTo-HtmlText $d.Name) ($(ConvertTo-HtmlText $d.Media), $($d.SizeGB) GB)</td><td>$(ConvertTo-HtmlText $d.HealthStatus) &middot; $(ConvertTo-HtmlText $wear)</td></tr>")
+            # B3: a drive FriendlyName can be a user-set label on an external/USB drive (PII the redaction map
+            # cannot know - audit Fix #2), so the redacted report shows Media + size only, never the raw name.
+            $driveLabel = if ($redact) { "$(ConvertTo-HtmlText $d.Media) drive, $($d.SizeGB) GB" } else { "$(ConvertTo-HtmlText $d.Name) ($(ConvertTo-HtmlText $d.Media), $($d.SizeGB) GB)" }
+            [void]$sb.AppendLine("<tr><td class=""k"">$driveLabel</td><td>$(ConvertTo-HtmlText $d.HealthStatus) &middot; $(ConvertTo-HtmlText $wear)</td></tr>")
         }
         [void]$sb.AppendLine('</table></div>')
     }
 
-    [void]$sb.AppendLine('<div class="foot">This is a read-only second opinion, not a verdict. Confirm before acting. For public help or AI help, use the redacted packet <span class="mono">out\ai-prompt.txt</span> (or <span class="mono">out\packet\</span> from -HelperPacket) - key identifiers removed best-effort. This full report.html is NOT redacted - keep it between you and your helper.</div>')
+    if ($redact) {
+        [void]$sb.AppendLine('<div class="foot">This is a read-only second opinion, not a verdict. Confirm before acting. This is the REDACTED, share-safe report - key identifiers removed best-effort (not guaranteed). For a deeper look, the helper can paste <span class="mono">ai-prompt.txt</span> into ChatGPT or Claude.</div>')
+    } else {
+        [void]$sb.AppendLine('<div class="foot">This is a read-only second opinion, not a verdict. Confirm before acting. For public help or AI help, use the redacted packet <span class="mono">out\ai-prompt.txt</span> (or <span class="mono">out\packet\</span> from -HelperPacket) - key identifiers removed best-effort. This full report.html is NOT redacted - keep it between you and your helper.</div>')
+    }
     [void]$sb.AppendLine('</div></body></html>')
-    return $sb.ToString()
+    $html = $sb.ToString()
+    # Redacted share-safe variant (B3): the drives table is rendered name-free above (a FriendlyName the map
+    # cannot know - audit Fix #2 class); this backstop masks host / user / serial (map) + MAC / IPv4 / IPv6 +
+    # \Users\ profile paths in the header, notes, and culprit text, while leaving hardware models (Manufacturer /
+    # Model / CPU / GPU / drive Media) intact. The default local report (no $map / $redact) is byte-unchanged.
+    if ($redact -and $map) { $html = Protect-Text $html $map }
+    return $html
 }
 
 # ---------------------------------------------------------------------------

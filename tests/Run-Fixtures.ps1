@@ -956,6 +956,35 @@ foreach ($rc in $auChecks) {
     else { Write-Host "VIOLATED  $($rc.N)" -ForegroundColor Red; $afail++ }
 }
 
+# ---- B3 redacted-HTML leak-test: the redacted, share-safe report.html (Render-Html redact mode, emitted into
+#      the -HelperPacket bundle) must mask EVERY identifier the local report.html shows - host (map), user/serial,
+#      MAC/IPv4/IPv6, \Users\ profile paths (Protect-Text backstop), AND the drives-table FriendlyName (rendered
+#      name-free, since the map cannot know a user-set external-drive label - audit Fix #2 class) - while keeping
+#      acceptable hardware detail (Manufacturer/Model/CPU/GPU). The DEFAULT local report.html stays unredacted.
+$b3Sys  = $redSys   # host DESKTOP-RED01, user redacted_user, serial SN-REDACT-77, GPU field carries MAC/IPv4/IPv6
+$b3Deep = [pscustomobject]@{ Requested = $true; Status = 'debugger-failed'; Path = 'C:\Users\Redacted Person\AppData\Local\CrashDumps\x.dmp'; Source = 'x'; Notes = @(); BugcheckCode = '0x116'; BugcheckParameters = @(); ModuleName = ''; FaultingAddress = $null; IsThirdParty = $false; Tool = ''; Detail = '' }
+$b3Diag = New-Diagnosis (_data @{ Drives = @( (_drive 'Redacted Person Backup USB' 'SSD' 500 'Unhealthy' $true) ); Volumes = @( (_vol 'C:' 200 465 $false) ); DeepDump = $b3Deep; Crashes = @( (_crash -1 'BugCheck 1001' '0x116') ) })
+$b3SavedDrives = $script:LastDrives   # the drives TABLE reads $script:LastDrives (set by the collector); set + restore
+$script:LastDrives = @( [pscustomobject]@{ Name = 'Redacted Person Backup USB'; Media = 'SSD'; SizeGB = 500; HealthStatus = 'Unhealthy'; Wear = $null; ReliabilityReadable = $true } )
+$b3Red   = Render-Html $b3Sys $b3Diag $redMap $true
+$b3Plain = Render-Html $b3Sys $b3Diag
+$b3Pkt   = New-HelperPacketArtifacts $b3Sys $b3Diag $redMap $packetStamp
+$script:LastDrives = $b3SavedDrives
+$b3Checks = @(
+    @{ N = 'b3 leak-test: the redacted report.html masks host / user / serial / MAC / IPv4 / IPv6 + the deep-dump profile path'; C = { ($b3Red -notmatch 'DESKTOP-RED01') -and ($b3Red -notmatch 'redacted_user') -and ($b3Red -notmatch 'SN-REDACT-77') -and ($b3Red -notmatch '00:1A:2B:3C:4D:5E') -and ($b3Red -notmatch '192\.168\.1\.42') -and ($b3Red -notmatch 'Redacted Person') -and ($b3Red -match '\[HOST_1\]') } }
+    @{ N = 'b3 leak-test: the redacted report.html drives table is name-free (Media + size, no raw FriendlyName)'; C = { ($b3Red -notmatch 'Backup USB') -and ($b3Red -match 'SSD drive, 500 GB') } }
+    @{ N = 'b3: acceptable hardware detail (Manufacturer / Model / GPU) is PRESERVED in the redacted report'; C = { ($b3Red -match 'ACME') -and ($b3Red -match 'Box') -and ($b3Red -match 'NVIDIA') } }
+    @{ N = 'b3: the redacted report is labeled REDACTED / share-safe, not the unredacted-local note'; C = { ($b3Red -match 'REDACTED, share-safe report') -and ($b3Red -notmatch 'NOT redacted - it shows your PC name') } }
+    @{ N = 'b3: the DEFAULT report.html stays unredacted (host + drive FriendlyName present) - local report unchanged'; C = { ($b3Plain -match 'DESKTOP-RED01') -and ($b3Plain -match 'Backup USB') -and ($b3Plain -match 'NOT redacted - it shows your PC name') } }
+    @{ N = 'b3: the helper packet includes the redacted report.html (share-safe; no host / drive name / user)'; C = { $b3Pkt.Contains('report.html') -and ($b3Pkt['report.html'] -notmatch 'DESKTOP-RED01|Backup USB|redacted_user') } }
+)
+foreach ($rc in $b3Checks) {
+    $ok = $false
+    try { $ok = [bool](& $rc.C) } catch { $ok = $false }
+    if ($ok) { Write-Host "OK        $($rc.N)" -ForegroundColor Green; $apass++ }
+    else { Write-Host "VIOLATED  $($rc.N)" -ForegroundColor Red; $afail++ }
+}
+
 # ---- No-script-path output contract (irm|iex / scriptblock web-run). The path bootstrap must NEVER
 #      Split-Path/Join-Path a null script path.
 #      With no script path: output defaults under the user's Documents (NEVER the current dir / System32) and

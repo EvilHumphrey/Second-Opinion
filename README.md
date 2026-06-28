@@ -153,22 +153,25 @@ All read-only, all local — it reads (never writes) these and fuses them into t
 
 ## Privacy & what's safe to share
 
-`report.html` is **unredacted** (PC name + hardware) — for your trusted helper only, never public. For anything
-public — an AI, a forum, Discord, GitHub, screenshots — share the **redacted packet** instead.
+The top-level **`out\report.html`** is **unredacted** (PC name + hardware) — for your trusted helper only, never
+public. For anything public — an AI, a forum, Discord, GitHub, screenshots — share the **redacted packet** instead.
 
-- **Safe to share:** `out\ai-prompt.txt`, and the `out\packet\` files from `-HelperPacket`
-  (`helper-summary.md`, `redacted-evidence.json`, `redaction-audit.txt`, `unreadable-signals.txt`).
-- **Don't post publicly:** `report.html`, the whole `out` folder, screenshots of `report.html`, or anything
-  you haven't checked for personal details.
+- **Safe to share:** `out\ai-prompt.txt`, and the `-HelperPacket` bundle in `out\packet\` — a **redacted
+  `report.html`** plus `helper-summary.md`, `redacted-evidence.json`, `redaction-audit.txt`,
+  `unreadable-signals.txt`.
+- **Don't post publicly:** the top-level **`out\report.html`** (the unredacted local report), the whole `out`
+  folder, screenshots of the unredacted report, or anything you haven't checked for personal details.
 
-Redaction is **best-effort, not a guarantee**, and there is no redacted HTML report yet — for public sharing,
-use the redacted packet. Found an identifier that survives into `ai-prompt.txt`? That's a bug worth reporting —
-see [`SECURITY.md`](SECURITY.md) (please don't paste the surviving identifier into a public issue).
+Redaction is **best-effort, not a guarantee** — for public sharing, use the redacted packet (the `-HelperPacket`
+bundle now includes a share-safe `report.html`). Found an identifier that survives into the redacted artifacts?
+That's a bug worth reporting — see [`SECURITY.md`](SECURITY.md) (please don't paste the surviving identifier into
+a public issue).
 
 ## Known limitations (v0, on purpose)
 
 - Best-effort redaction is **not** a guarantee — a user-named device or app can slip through.
-- No redacted HTML report yet — `ai-prompt.txt` is the share-safe artifact.
+- The redacted share-safe `report.html` (in the `-HelperPacket` bundle) is best-effort redacted, not guaranteed
+  — like `ai-prompt.txt`. The top-level `out\report.html` stays unredacted (local/helper-only).
 - No AI inside the tool — *you* paste the prompt into your own AI (keeps it free, private, offline-capable).
 - No full minidump stack analysis — it reasons over event/signal *patterns*. The optional `-DeepDump` flag adds
   read-only faulting-module attribution as weak evidence, but not WinDbg `!analyze` root-causing.
@@ -177,7 +180,7 @@ see [`SECURITY.md`](SECURITY.md) (please don't paste the surviving identifier in
 
 ## Trust the ranking (run the tests)
 
-The scorer is deterministic and guarded by a fixture harness — 51 snapshot fixtures plus 249 guardrail
+The scorer is deterministic and guarded by a fixture harness — 51 snapshot fixtures plus 255 guardrail
 assertions that must always hold (e.g. *a single GPU bugcheck is never tier-1*, *blank SMART is never
 "healthy"*, *dump-less restarts never reach High*, *real-but-sub-threshold signals never read as "clean"*,
 *a corroborator like a SMART warning is never a lone verdict*, *a hostile device name can't inject HTML or
