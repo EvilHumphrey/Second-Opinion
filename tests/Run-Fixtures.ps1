@@ -1096,6 +1096,27 @@ foreach ($rc in $dsChecks) {
     else { Write-Host "VIOLATED  $($rc.N)" -ForegroundColor Red; $afail++ }
 }
 
+# ---- Deep-scan CAN-007: the baseline diff must not re-emit a prior-only app/device label from a foreign/old
+#      baseline - the prior culprit Title + prior Observed are unknown to the current redaction map. Fix drops the
+#      prior title (keeps the current top + the baseline's tier/confidence) and emits a cleared-observed COUNT only.
+$c7Base = [pscustomobject]@{
+    SchemaVersion = '1.0'
+    Culprits = @([pscustomobject]@{ Title = 'Application keeps crashing: AveryStone-SaveEditor.exe'; Tier = 2; Confidence = 'Medium' })
+    Observed = @('Prior weak signal involving device AveryStone USB Rescue')
+}
+$c7Cur = New-Diagnosis (_data @{ AppCrashes = @(1, 2, 3 | ForEach-Object { _app 'chrome.exe' 'ntdll.dll' }) })
+$c7Cur | Add-Member -NotePropertyName EvidenceSnapshot -NotePropertyValue (New-SoEvidenceObject $redSys $c7Cur $packetStamp) -Force
+$c7Lines = (@(Get-SoBaselineDiffLines (Compare-SoEvidence $c7Base $c7Cur)) -join "`n")
+$c7Checks = @(
+    @{ N = 'deep-scan CAN-007: a prior-only app/device label from the baseline does NOT appear in the diff (prior Title dropped; cleared-observed is a count)'; C = { ($c7Lines -notmatch 'AveryStone') -and ($c7Lines -match 'Top hypothesis changed') -and ($c7Lines -match 'no longer observed') } }
+)
+foreach ($rc in $c7Checks) {
+    $ok = $false
+    try { $ok = [bool](& $rc.C) } catch { $ok = $false }
+    if ($ok) { Write-Host "OK        $($rc.N)" -ForegroundColor Green; $apass++ }
+    else { Write-Host "VIOLATED  $($rc.N)" -ForegroundColor Red; $afail++ }
+}
+
 # ---- No-script-path output contract (irm|iex / scriptblock web-run). The path bootstrap must NEVER
 #      Split-Path/Join-Path a null script path.
 #      With no script path: output defaults under the user's Documents (NEVER the current dir / System32) and

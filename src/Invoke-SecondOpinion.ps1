@@ -3175,7 +3175,10 @@ function Compare-SoEvidence($baselineObj, $diag) {
     $baseTop = Get-SoTopHypothesis $baselineObj
     $curTop = Get-SoTopHypothesis $current
     if ($baseTop.Title -ne $curTop.Title -or $baseTop.Tier -ne $curTop.Tier -or $baseTop.Confidence -ne $curTop.Confidence) {
-        $lines += "Top hypothesis changed from $($baseTop.Display) to $($curTop.Display). This is a note only; the current scorer still ranks the current run alone."
+        # Do NOT emit the BASELINE's culprit Title - a prior-only app/device label in it is unknown to the current
+        # redaction map and would leak into the share-safe diff (Codex deep-scan DSD-CAN-007). Emit the current
+        # (map-redacted) top + the baseline's tier/confidence only; the prior title is dropped.
+        $lines += "Top hypothesis changed (now $($curTop.Display); the baseline's top suspect was a different culprit at tier $($baseTop.Tier) / $($baseTop.Confidence)). Note only; the current scorer ranks the current run alone."
         $changed = $true
     } else {
         $lines += "Top hypothesis unchanged: $($curTop.Display)."
@@ -3189,8 +3192,11 @@ function Compare-SoEvidence($baselineObj, $diag) {
         $lines += "New observed weak signal: $o"
         $changed = $true
     }
-    foreach ($o in $clearedObserved) {
-        $lines += "Cleared observed weak signal: $o"
+    # Do NOT emit the BASELINE's observed strings verbatim - a prior-only label (e.g. a prior deep-dump module, or
+    # a foreign / hand-edited baseline's text) is unknown to the current map and would leak into the share-safe
+    # diff (Codex deep-scan DSD-CAN-007). Report a COUNT only; current weak signals are shown in full above.
+    if (@($clearedObserved).Count -gt 0) {
+        $lines += "$(@($clearedObserved).Count) baseline weak signal(s) are no longer observed (content omitted - re-run to see current weak signals). Note only."
         $changed = $true
     }
     if (@($newObserved).Count -eq 0 -and @($clearedObserved).Count -eq 0) {
