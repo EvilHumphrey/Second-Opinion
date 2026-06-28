@@ -1058,6 +1058,44 @@ foreach ($rc in $acAmpChecks) {
     else { Write-Host "VIOLATED  $($rc.N)" -ForegroundColor Red; $afail++ }
 }
 
+# ---- Deep Security Scan fixes (Codex Deep Security Scan 2026-06-28; DSD-CAN-001..006): read-only PATH safety (no
+#      PATH-resolved git/cdb execution), no UNC network-egress, and three share-safe leaks. The git/cdb checks
+#      plant a hostile git.cmd / cdb.exe first in PATH and assert it is NEITHER executed NOR selected (teeth: the
+#      pre-fix code ran `git rev-parse` and picked PATH cdb first).
+$dsTmp = Join-Path $env:TEMP ('so-gate-' + [System.Guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Force -Path $dsTmp | Out-Null
+$dsMarker = Join-Path $dsTmp 'pwned.txt'
+Set-Content -Path (Join-Path $dsTmp 'git.cmd') -Value ('@echo pwned> "' + $dsMarker + '"') -Encoding Ascii
+Set-Content -Path (Join-Path $dsTmp 'cdb.exe') -Value 'x' -Encoding Ascii
+$dsSavedPath = $env:PATH
+$dsGitRan = $true; $dsCdbTemp = $true; $dsGitSha = ''
+try {
+    $env:PATH = $dsTmp + ';' + $env:PATH
+    $dsGitSha = (Get-SoVersionStamp).GitSha
+    $dsGitRan = Test-Path $dsMarker
+    $dsDbg = Get-DumpDebuggerPath
+    $dsCdbTemp = [bool]($dsDbg -and ([string]$dsDbg).StartsWith($dsTmp))
+} finally {
+    $env:PATH = $dsSavedPath
+    Remove-Item $dsTmp -Recurse -Force -ErrorAction SilentlyContinue
+}
+$dsUncResolve = Resolve-DumpPath -Crashes @([pscustomobject]@{ DumpPath = '\\NAS-Avery\CrashShare\dumps\mini.dmp'; Time = $null })
+$dsSum = Build-HelperSummary ([pscustomobject]@{ ComputerName='A'; UserName='B'; BiosSerial=''; OS='Win11'; OSBuild='26200'; Manufacturer='ACME'; Model='Box'; CPU='CPU'; RAMGB=16; Gpu=$null; RamModules=1; RamSpeed=0; XmpActive=$false; IsElevated=$true; UptimeText='1d'; LastBoot=$null }) (New-Diagnosis (_data @{})) $packetStamp
+$dsUncMasked = Protect-Text 'dump at \\NAS-Avery\CrashShare\d\m.dmp end' (New-RedactionMap $probeSys)
+$dsChecks = @(
+    @{ N = 'deep-scan CAN-004: version stamp reads .git directly - a hostile git.cmd first in PATH is NOT executed'; C = { (-not $dsGitRan) -and ($dsGitSha -match '^([0-9a-fA-F]{7,40}|n/a)$') } }
+    @{ N = 'deep-scan CAN-001: Get-DumpDebuggerPath does NOT select a cdb.exe from an untrusted PATH dir (Kits-first / trusted-only)'; C = { -not $dsCdbTemp } }
+    @{ N = 'deep-scan CAN-002: a UNC WER dump path is skipped (not treated as found) with a network-skip note - no SMB touch'; C = { (-not ($dsUncResolve.Path -and ([string]$dsUncResolve.Path).StartsWith('\\'))) -and [bool](@($dsUncResolve.Notes) | Where-Object { $_ -match 'Network \(UNC\)' }) } }
+    @{ N = 'deep-scan CAN-003: a 1-character host/user is masked ([HOST_1]/[USER_1]) in share-safe helper-summary.md'; C = { ($dsSum -match '- Computer: \[HOST_1\]') -and ($dsSum -match '- User: \[USER_1\]') -and ($dsSum -notmatch '(?m)- Computer: A$') } }
+    @{ N = 'deep-scan CAN-006: a UNC server/share is masked to \\[NETWORK]\[SHARE] in share-safe sinks (local report keeps it)'; C = { ($dsUncMasked -notmatch 'NAS-Avery|CrashShare') -and ($dsUncMasked -match '\[NETWORK\]') } }
+)
+foreach ($rc in $dsChecks) {
+    $ok = $false
+    try { $ok = [bool](& $rc.C) } catch { $ok = $false }
+    if ($ok) { Write-Host "OK        $($rc.N)" -ForegroundColor Green; $apass++ }
+    else { Write-Host "VIOLATED  $($rc.N)" -ForegroundColor Red; $afail++ }
+}
+
 # ---- No-script-path output contract (irm|iex / scriptblock web-run). The path bootstrap must NEVER
 #      Split-Path/Join-Path a null script path.
 #      With no script path: output defaults under the user's Documents (NEVER the current dir / System32) and

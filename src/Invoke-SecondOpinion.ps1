@@ -545,8 +545,47 @@ function Get-Sha256Hex($text) {
     }
 }
 
+function Get-GitShaFromCheckout($startDir) {
+    # Read the short commit SHA by reading .git files DIRECTLY - never by invoking PATH-resolved `git`, which would
+    # execute attacker-controlled code on every normal run and break the read-only promise (Codex deep-scan
+    # DSD-CAN-004). Walk up from $startDir to a .git dir, read HEAD, resolve a symbolic ref via refs/ or
+    # packed-refs. Returns 'n/a' outside a checkout. All file reads, no process launch.
+    if ([string]::IsNullOrWhiteSpace($startDir)) { return 'n/a' }
+    $dir = $startDir
+    for ($i = 0; $i -lt 10 -and $dir; $i++) {
+        $gitDir = Join-Path $dir '.git'
+        if (Test-Path -LiteralPath $gitDir -PathType Container) {
+            $headFile = Join-Path $gitDir 'HEAD'
+            if (-not (Test-Path -LiteralPath $headFile -PathType Leaf)) { return 'n/a' }
+            $head = ([string](Get-Content -LiteralPath $headFile -Raw -ErrorAction SilentlyContinue)).Trim()
+            if ($head -match '^ref:\s*(.+)$') {
+                $ref = $Matches[1].Trim()
+                $refFile = Join-Path $gitDir ($ref -replace '/', '\')
+                if (Test-Path -LiteralPath $refFile -PathType Leaf) {
+                    $sha = ([string](Get-Content -LiteralPath $refFile -Raw -ErrorAction SilentlyContinue)).Trim()
+                    if ($sha -match '^[0-9a-fA-F]{7,40}$') { return $sha.Substring(0, [Math]::Min(12, $sha.Length)) }
+                }
+                $packed = Join-Path $gitDir 'packed-refs'
+                if (Test-Path -LiteralPath $packed -PathType Leaf) {
+                    foreach ($line in (Get-Content -LiteralPath $packed -ErrorAction SilentlyContinue)) {
+                        if ($line -match ('^([0-9a-fA-F]{40})\s+' + [regex]::Escape($ref) + '\s*$')) { return $Matches[1].Substring(0, 12) }
+                    }
+                }
+                return 'n/a'
+            }
+            if ($head -match '^[0-9a-fA-F]{7,40}$') { return $head.Substring(0, [Math]::Min(12, $head.Length)) }
+            return 'n/a'
+        }
+        $parent = Split-Path -Parent $dir
+        if (-not $parent -or $parent -eq $dir) { break }
+        $dir = $parent
+    }
+    return 'n/a'
+}
+
 function Get-SoVersionStamp {
-    $git = Invoke-Safe { (git rev-parse --short HEAD 2>$null).Trim() } 'n/a'
+    $startDir = if ($PSScriptRoot) { $PSScriptRoot } else { '' }
+    $git = Invoke-Safe { Get-GitShaFromCheckout $startDir } 'n/a'
     if ([string]::IsNullOrWhiteSpace($git)) { $git = 'n/a' }
     [pscustomobject]@{
         ToolVersion = $ScriptVersion
@@ -845,9 +884,10 @@ function ConvertFrom-DebuggerDumpText($text) {
 }
 
 function Get-DumpDebuggerPath {
-    $cmd = Get-Command cdb.exe -ErrorAction SilentlyContinue
-    if ($cmd) { return $cmd.Source }
-
+    # Prefer the FIXED, trusted Windows Kits locations BEFORE any PATH-resolved cdb.exe, so a planted cdb.exe early
+    # in PATH cannot be selected and executed - the tool is read-only and -DeepDump must not become arbitrary local
+    # code execution (Codex deep-scan DSD-CAN-001). PATH is only a last resort, and only when the resolved binary
+    # lives under a trusted Program Files / Windows Kits location (a writable temp/cwd cdb.exe is ignored).
     $roots = @()
     if (${env:ProgramFiles(x86)}) { $roots += (Join-Path ${env:ProgramFiles(x86)} 'Windows Kits\10\Debuggers') }
     if ($env:ProgramFiles)        { $roots += (Join-Path $env:ProgramFiles        'Windows Kits\10\Debuggers') }
@@ -855,6 +895,15 @@ function Get-DumpDebuggerPath {
         foreach ($arch in @('x64', 'x86', 'arm64')) {
             $p = Join-Path (Join-Path $root $arch) 'cdb.exe'
             if (Test-Path -LiteralPath $p) { return $p }
+        }
+    }
+    # Last resort: a PATH-resolved cdb.exe, accepted ONLY from a trusted install root (not a writable temp/cwd dir).
+    $cmd = Get-Command cdb.exe -ErrorAction SilentlyContinue
+    if ($cmd -and $cmd.Source) {
+        $src = [string]$cmd.Source
+        $trusted = @($env:ProgramFiles, ${env:ProgramFiles(x86)}, $env:ProgramW6432) | Where-Object { $_ }
+        foreach ($t in $trusted) {
+            if ($src.StartsWith(([string]$t), [System.StringComparison]::OrdinalIgnoreCase)) { return $src }
         }
     }
     return $null
@@ -969,6 +1018,14 @@ function Resolve-DumpPath {
         $key = ([string]$c.Path).ToLowerInvariant()
         if ($seen.ContainsKey($key)) { continue }
         $seen[$key] = $true
+        if (([string]$c.Path) -match '^[\\/]{2}') {
+            # UNC path: Test-Path / File.Open on it would initiate SMB/network access, breaking the tool's
+            # local-only, read-only promise (and could expose Windows auth material). Skip it - never touch the
+            # network. The full path stays in the LOCAL report only; share-safe sinks mask the server/share via
+            # Protect-Text. (Codex deep-scan DSD-CAN-002.)
+            $notes += "Network (UNC) crash-dump path skipped - the tool reads only local dumps and never touches the network: $($c.Path). Missing dump data is not clean."
+            continue
+        }
         if (-not (Test-Path -LiteralPath $c.Path -PathType Leaf)) { continue }
         $read = Test-DumpFileReadable $c.Path
         if ($read.Readable) {
@@ -2526,6 +2583,10 @@ function Protect-Text($text, $map) {
     # the map missed it and this masks the \Users\<segment> folder to [USER] - the sink-level path leak the map
     # alone cannot close.
     $t = [regex]::Replace($t, (Get-UserPathRedactionPattern), '${1}[USER]')
+    # UNC server/share root: \\server\share -> \\[NETWORK]\[SHARE] (the rest of the path is kept). Share-safe sinks
+    # must not disclose internal server / share names; the local unredacted report keeps the full path. Anchored so
+    # a JSON-escaped LOCAL path (C:\\Users\\...) is never mistaken for a UNC root. (Codex deep-scan DSD-CAN-006.)
+    $t = [regex]::Replace($t, '(?i)(?<![A-Za-z0-9:])\\\\[^\\/\r\n]+\\[^\\/\r\n]+', '\\[NETWORK]\[SHARE]')
     $t = [regex]::Replace($t, '\b([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}\b', '[MAC]')
     $t = [regex]::Replace($t, (Get-Ipv6RedactionPattern), '[IPV6]')
     $t = [regex]::Replace($t, (Get-Ipv4RedactionPattern), '[IP]')
@@ -2721,9 +2782,12 @@ function Build-HelperSummary($sys, $diag, $stamp) {
     [void]$sb.AppendLine('Packet redaction: share-safe; local report.html is not included.')
     [void]$sb.AppendLine('')
     [void]$sb.AppendLine('## Redacted case identifiers')
-    [void]$sb.AppendLine("- Computer: $(Protect-PromptValue $sys.ComputerName)")
-    [void]$sb.AppendLine("- User: $(Protect-PromptValue $sys.UserName)")
-    [void]$sb.AppendLine("- BIOS serial: $(Protect-PromptValue $sys.BiosSerial)")
+    # Hard-mask the structured identity fields (length-independent), like the evidence-JSON CaseIdentifiers - the
+    # broad redaction map skips <2-char values to protect prose, so a 1-char host/user would otherwise print raw
+    # in this share-safe summary. (Codex deep-scan DSD-CAN-003.)
+    [void]$sb.AppendLine("- Computer: $(if ([string]$sys.ComputerName) { '[HOST_1]' } else { '' })")
+    [void]$sb.AppendLine("- User: $(if ([string]$sys.UserName) { '[USER_1]' } else { '' })")
+    [void]$sb.AppendLine("- BIOS serial: $(Protect-Text ([string]$sys.BiosSerial) (New-RedactionMap $sys))")
     [void]$sb.AppendLine('')
     [void]$sb.AppendLine('## Redacted system snapshot')
     [void]$sb.AppendLine("- OS: $(Protect-PromptValue $sys.OS) build $($sys.OSBuild)")
@@ -3229,6 +3293,13 @@ function Get-RedactionAuditCounts($rawTexts, $map) {
         elseif ($v.StartsWith('[USER_')) { $counts.Usernames += Get-RegexMatchCount $all $k }
         elseif ($v.StartsWith('[SERIAL_')) { $counts.Serials += Get-RegexMatchCount $all $k }
     }
+    # Identifiers redacted AT SOURCE (evidence-JSON CaseIdentifiers + helper-summary identity) already appear as
+    # placeholders in these texts, so the raw map-key match above counts 0 for them - add the placeholder
+    # occurrences so the audit receipt still honestly reports them. (Codex deep-scan + CAN-003: source-redaction
+    # otherwise made the raw-match-only count read 0.)
+    $counts.Hostnames += Get-RegexMatchCount $all '\[HOST_\d+\]'
+    $counts.Usernames += Get-RegexMatchCount $all '\[USER_\d+\]'
+    $counts.Serials   += Get-RegexMatchCount $all '\[SERIAL_\d+\]'
     $macPattern = '\b([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}\b'
     $counts.Macs = Get-RegexMatchCount $all $macPattern
     $withoutMac = [regex]::Replace($all, $macPattern, ' ')
