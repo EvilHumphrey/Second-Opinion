@@ -897,6 +897,32 @@ foreach ($rc in $kbChecks) {
     else { Write-Host "VIOLATED  $($rc.N)" -ForegroundColor Red; $afail++ }
 }
 
+# ---- -WhatItReads transparency manifest (B4): the read-only preview lists every source the tool reads. It is
+#      a CURATED manifest; this DRIFT-GUARD keeps it honest - it cross-checks the Win32_* CIM classes the
+#      collectors actually query against the manifest text, and asserts each major read surface + each
+#      switch-gated read is named. Add a collector read -> add it to Get-SoReadManifest or this fails. (The
+#      manifest functions are defined above the dot-source guard, so they are testable here without executing
+#      the pipeline; the -WhatItReads branch itself is a one-line print-and-return below that guard.)
+$wirManifest = Get-SoReadManifest
+$wirText     = (@($wirManifest | ForEach-Object { $_.Category + ' :: ' + (@($_.Reads) -join ' | ') }) -join "`n")
+$wirPreamble = (@(Get-SoReadManifestPreamble) -join ' ')
+$wirSrc      = [System.IO.File]::ReadAllText($scriptPath)
+$wirCim      = @([regex]::Matches($wirSrc, 'Get-CimInstance\s+(?:-ClassName\s+)?(Win32_\w+)') | ForEach-Object { $_.Groups[1].Value } | Sort-Object -Unique)
+$wirCimMissing = @($wirCim | Where-Object { $wirText -notmatch [regex]::Escape($_) })
+$wirChecks = @(
+    @{ N = 'whatitreads: Get-SoReadManifest is non-empty and every category lists at least one read'; C = { (@($wirManifest).Count -ge 8) -and (-not (@($wirManifest) | Where-Object { @($_.Reads).Count -lt 1 })) } }
+    @{ N = 'whatitreads (drift-guard): every Win32_* CIM class the collectors query is named in the manifest'; C = { (@($wirCim).Count -ge 5) -and (@($wirCimMissing).Count -eq 0) } }
+    @{ N = 'whatitreads: the manifest names each major read surface (System + Application logs, storage + device cmdlets, CrashControl, bugchecks KB)'; C = { ($wirText -match 'Event Log - System') -and ($wirText -match 'Event Log - Application') -and ($wirText -match 'Get-PhysicalDisk') -and ($wirText -match 'Get-StorageReliabilityCounter') -and ($wirText -match 'Get-Volume') -and ($wirText -match 'Get-PnpDevice') -and ($wirText -match 'CrashControl') -and ($wirText -match 'bugchecks\.json') } }
+    @{ N = 'whatitreads: switch-gated reads are labeled (dump files -> -DeepDump; throttle / low-memory -> -PerformanceSmokeTest)'; C = { ($wirText -match 'only with -DeepDump') -and ($wirText -match 'MEMORY\.DMP') -and ($wirText -match 'only with -PerformanceSmokeTest') -and ($wirText -match 'Kernel-Processor-Power 37') } }
+    @{ N = 'whatitreads: the preview states it is read-only, sends nothing, and collects nothing in this mode'; C = { ($wirPreamble -match 'read-only') -and ($wirPreamble -match 'sends nothing|nothing off the machine') -and ($wirPreamble -match 'collects NOTHING') } }
+)
+foreach ($rc in $wirChecks) {
+    $ok = $false
+    try { $ok = [bool](& $rc.C) } catch { $ok = $false }
+    if ($ok) { Write-Host "OK        $($rc.N)" -ForegroundColor Green; $apass++ }
+    else { Write-Host "VIOLATED  $($rc.N)" -ForegroundColor Red; $afail++ }
+}
+
 # ---- No-script-path output contract (irm|iex / scriptblock web-run). The path bootstrap must NEVER
 #      Split-Path/Join-Path a null script path.
 #      With no script path: output defaults under the user's Documents (NEVER the current dir / System32) and

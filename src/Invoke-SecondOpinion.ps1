@@ -23,6 +23,7 @@ param(
     [switch]$DeepDump,
     [switch]$HelperPacket,
     [switch]$PerformanceSmokeTest,
+    [switch]$WhatItReads,
     [string]$Baseline
 )
 
@@ -3374,6 +3375,86 @@ td.k{color:var(--muted);width:42%}
 }
 
 # ---------------------------------------------------------------------------
+# -WhatItReads: read-only transparency manifest (B4)
+# ---------------------------------------------------------------------------
+# Lists EVERY source the tool reads, grouped, with a plain-English why and the switch that gates the
+# conditional ones - the honest answer to "what does this touch before I trust it?". Printed on demand
+# (-WhatItReads), after which the tool EXITS without collecting, scoring, or writing anything. The manifest is
+# a curated list kept honest by the "whatitreads" drift-guard in the harness: it cross-checks the Win32_* CIM
+# classes the collectors actually query and asserts each major read surface + switch-gated read is named here.
+function Get-SoReadManifestPreamble {
+    @(
+        'This lists every source Second Opinion READS. It makes no changes to your PC (read-only), it sends',
+        'nothing off the machine, and in this -WhatItReads mode it collects NOTHING - it just prints this list',
+        'and exits. A real run additionally writes a report (report.html) and a redacted AI prompt',
+        '(ai-prompt.txt) into the output folder, and nothing else.'
+    )
+}
+function Get-SoReadManifest {
+    @(
+        [pscustomobject]@{ When = 'always'; Category = 'Windows Event Log - System'; Reads = @(
+                'Kernel-Power 41 - unexpected restarts with no clean shutdown',
+                'Windows Error Reporting 1001 - bugcheck (BSOD) stop codes',
+                'EventLog 6008 - unexpected shutdowns',
+                'Kernel-Boot 27 - boot type / recovery',
+                'Display driver 4101 - GPU timeouts (TDR)',
+                'GPU vendor driver 153 / 14 - GPU reset / hang',
+                'volmgr 161 - crash-dump write failures',
+                'disk / storage 7, 11, 51, 129, 153, 55, 157, and disk 52 - storage, filesystem, and SMART predictive-failure events',
+                'WHEA-Logger - hardware error records',
+                'WindowsUpdateClient 20 / 25 - failed Windows updates',
+                'MemoryDiagnostics-Results 1101 - Windows Memory Diagnostic results'
+            ) }
+        [pscustomobject]@{ When = 'always'; Category = 'Windows Event Log - Application'; Reads = @(
+                'Application Error 1000 / Application Hang 1002 - application crashes',
+                'Windows Error Reporting 1001 - application fault reports'
+            ) }
+        [pscustomobject]@{ When = 'always'; Category = 'System inventory (CIM / WMI)'; Reads = @(
+                'Win32_OperatingSystem - OS edition, build, uptime',
+                'Win32_ComputerSystem - manufacturer, model, total RAM',
+                'Win32_Processor - CPU model',
+                'Win32_BIOS - BIOS version and serial (the serial is masked in shareable output)',
+                'Win32_VideoController - GPU model',
+                'Win32_PhysicalMemory - memory modules, speed, and XMP / EXPO state'
+            ) }
+        [pscustomobject]@{ When = 'always'; Category = 'Storage health'; Reads = @(
+                'Get-PhysicalDisk - drive list and reported health status',
+                'Get-StorageReliabilityCounter - SMART wear %, temperature, read errors, power-on hours',
+                'Get-Volume - free and total space per drive letter'
+            ) }
+        [pscustomobject]@{ When = 'always'; Category = 'Devices'; Reads = @(
+                'Get-PnpDevice - devices flagged Error / Degraded / Unknown in Device Manager (plus the problem code)'
+            ) }
+        [pscustomobject]@{ When = 'always'; Category = 'Registry (read-only)'; Reads = @(
+                'HKLM\SYSTEM\CurrentControlSet\Control\CrashControl - the crash-dump policy (is dump capture even enabled?)'
+            ) }
+        [pscustomobject]@{ When = 'always'; Category = 'Bundled knowledge base (NOT your machine)'; Reads = @(
+                'data\bugchecks.json (or the copy embedded in this script) - the stop-code reference that ships with the tool'
+            ) }
+        [pscustomobject]@{ When = '-PerformanceSmokeTest'; Category = 'CPU power + memory pressure (only with -PerformanceSmokeTest)'; Reads = @(
+                'Kernel-Processor-Power 37 - CPU firmware / thermal throttling',
+                'Resource-Exhaustion-Detector 2004 - low-memory (low virtual memory) events'
+            ) }
+        [pscustomobject]@{ When = '-DeepDump'; Category = 'Crash dump files (only with -DeepDump)'; Reads = @(
+                'WER dump paths from the crash records, C:\Windows\MEMORY.DMP, and C:\Windows\Minidump\*.dmp - the dump header / loaded-module list (via cdb.exe if it is installed)'
+            ) }
+    )
+}
+function Write-SoReadManifest {
+    Write-Host 'Second Opinion - what it reads (read-only preview)' -ForegroundColor Cyan
+    Write-Host ''
+    foreach ($line in (Get-SoReadManifestPreamble)) { Write-Host $line }
+    Write-Host ''
+    foreach ($g in (Get-SoReadManifest)) {
+        Write-Host $g.Category -ForegroundColor Yellow
+        foreach ($r in $g.Reads) { Write-Host "  - $r" }
+        Write-Host ''
+    }
+    Write-Host 'Conditional reads above are clearly labeled and happen ONLY when you pass that switch.' -ForegroundColor DarkGray
+    Write-Host 'Run without -WhatItReads to perform the scan.' -ForegroundColor DarkGray
+}
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 # When dot-sourced (e.g. by the test harness: . .\Invoke-SecondOpinion.ps1) every function above is
@@ -3381,6 +3462,9 @@ td.k{color:var(--muted);width:42%}
 # Direct execution (.\Invoke-SecondOpinion.ps1 / -File) continues into the read-only pipeline below.
 if ($MyInvocation.InvocationName -eq '.') { return }
 $script:SoPipelineEntered = $true   # reached ONLY on direct execution; the gate asserts dot-sourcing returns above this
+
+# -WhatItReads (B4): print the read-only transparency manifest and EXIT - collect nothing, write nothing.
+if ($WhatItReads) { Write-SoReadManifest; return }
 
 Write-Host 'Second Opinion - read-only diagnostic.' -ForegroundColor Cyan
 # Optional intake FIRST (so the user answers, then watches the scan). Auto-skips when -NoIntake is set

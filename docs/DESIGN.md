@@ -101,6 +101,18 @@ rule out overheating or a marginal PSU); an unreadable read is "NOT checked, not
 banner), never "good". Opt-in + golden-neutral: the switch-OFF path is byte-identical (every perf path is gated
 on `$perfRequested`).
 
+## Optional read-only transparency (`-WhatItReads`)
+A `-WhatItReads` switch (default OFF) prints a categorized manifest of EVERY source the tool reads - the
+System/Application event-log signals, the `Win32_*` CIM inventory classes, the storage/device cmdlets
+(`Get-PhysicalDisk` / `Get-StorageReliabilityCounter` / `Get-Volume` / `Get-PnpDevice`), the read-only
+`CrashControl` registry key, the bundled bugcheck KB, and the switch-gated reads (dump files only with
+`-DeepDump`; CPU-throttle / low-memory only with `-PerformanceSmokeTest`) - then EXITS without collecting,
+scoring, or writing anything. It is the honest answer to "what does this touch before I trust it?" for a
+cautious first-time user or a friend over Quick Assist, and it reinforces the read-only trust position by making
+the full read surface auditable up front. The manifest is a curated list (`Get-SoReadManifest`) kept honest by a
+harness drift-guard that cross-checks the `Win32_*` classes the collectors actually query and asserts every
+major read surface + switch-gated read is named, so it cannot silently drift from the code.
+
 ## Deliberately OUT of v0 (swamps that look easy)
 - **Native CPU/GPU temps** — no reliable native API; the real path is a signed kernel driver,
   which breaks the read-only promise. Use indirect signals (WHEA events, KP41 clustering, and the opt-in

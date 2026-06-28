@@ -52,6 +52,9 @@ Options:
 - `-OutDir <path>` — where to write the report (default `.\out`).
 - `-OpenReport` — open the HTML report when done.
 - `-NoRedact` — leave the AI prompt un-redacted (off by default; redaction is on).
+- `-WhatItReads` — *(optional)* print a categorized list of every source the tool reads (event logs, CIM/WMI
+  inventory, storage/device queries, the read-only registry key, the bundled bugcheck KB), then exit without
+  collecting or writing anything — the honest "what does this touch before I trust it?" preview.
 - `-DeepDump` — *(optional, advanced)* if a crash dump exists, parse it read-only with locally-installed
   debugging tools (no downloads) to name the faulting module as **weak corroborating evidence** — it never
   changes the ranking.
@@ -167,7 +170,7 @@ identifier that survives into `ai-prompt.txt`? That's a bug worth reporting — 
 
 ## Trust the ranking (run the tests)
 
-The scorer is deterministic and guarded by a fixture harness — 51 snapshot fixtures plus 237 guardrail
+The scorer is deterministic and guarded by a fixture harness — 51 snapshot fixtures plus 242 guardrail
 assertions that must always hold (e.g. *a single GPU bugcheck is never tier-1*, *blank SMART is never
 "healthy"*, *dump-less restarts never reach High*, *real-but-sub-threshold signals never read as "clean"*,
 *a corroborator like a SMART warning is never a lone verdict*, *a hostile device name can't inject HTML or
