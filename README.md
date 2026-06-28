@@ -180,7 +180,7 @@ a public issue).
 
 ## Trust the ranking (run the tests)
 
-The scorer is deterministic and guarded by a fixture harness — 51 snapshot fixtures plus 259 guardrail
+The scorer is deterministic and guarded by a fixture harness — 51 snapshot fixtures plus 266 guardrail
 assertions that must always hold (e.g. *a single GPU bugcheck is never tier-1*, *blank SMART is never
 "healthy"*, *dump-less restarts never reach High*, *real-but-sub-threshold signals never read as "clean"*,
 *a corroborator like a SMART warning is never a lone verdict*, *a hostile device name can't inject HTML or

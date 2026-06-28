@@ -1868,6 +1868,13 @@ function New-Diagnosis($data) {
             -Search "Windows 11 device $($pd.ProblemText) fix"
     }
 
+    # App-crash names captured for SHARE-SAFE redaction: a faulting app / module filename is a user-renamable
+    # label that can embed PII (a self-named .exe/.dll). Recorded here, masked in every share-safe sink via the
+    # map (built with $diag in the main pipeline); the LOCAL report never applies the map, so it keeps the name
+    # for the helper. (In-house adversarial audit 2026-06-28; operator decision = redact-share-safe-keep-local.)
+    $appCrashApp = ''
+    $appCrashModule = ''
+
     # J. App-level crashes (separate lane from system crashes).
     $appGroups = @($data.AppCrashes | Where-Object { $_.Kind -eq 'crash' -and $_.App } | Group-Object App | Sort-Object Count -Descending)
     $topApp = $appGroups | Select-Object -First 1
@@ -1875,6 +1882,8 @@ function New-Diagnosis($data) {
         $mod = ($topApp.Group | Select-Object -First 1).Module
         $modText = ''
         if (-not [string]::IsNullOrWhiteSpace($mod)) { $modText = ", faulting module $mod" }
+        $appCrashApp = [string]$topApp.Name
+        if (-not [string]::IsNullOrWhiteSpace($mod)) { $appCrashModule = [string]$mod }
         # Developer runtimes/interpreters crash routinely during normal work (a script erroring out is not
         # a PC fault). Keep the signal honest but de-weighted - cap at Low and say why - so a pile of
         # python.exe exits never outranks a real system signal. Down-weight, NOT hide: it could still be
@@ -2399,6 +2408,8 @@ function New-Diagnosis($data) {
         UnexplainedCount = $unexplainedCount
         BugcheckGroups   = $codeGroups
         AppCrashCount    = @($data.AppCrashes | Where-Object { $_.Kind -eq 'crash' }).Count
+        AppCrashApp      = $appCrashApp
+        AppCrashModule   = $appCrashModule
         CrashesReadable  = [bool]$data.CrashesReadable
         AllReadable      = $allReadable
         Observed         = $observed
@@ -2425,7 +2436,7 @@ function Add-NameRedaction($map, $value, $replacement) {
     $map["(?<![A-Za-z0-9_])$([regex]::Escape($s))(?![A-Za-z0-9_])"] = $replacement
 }
 
-function New-RedactionMap($sys) {
+function New-RedactionMap($sys, $diag = $null) {
     $map = [ordered]@{}
     Add-NameRedaction $map $sys.UserName '[USER_1]'
     Add-NameRedaction $map $sys.ComputerName '[HOST_1]'
@@ -2438,6 +2449,14 @@ function New-RedactionMap($sys) {
         # and rejoin with a whitespace-class pattern so it matches BOTH forms (also fixes the redaction-audit count).
         $tokens = @($serial.Trim() -split '\s+' | Where-Object { $_ -ne '' } | ForEach-Object { [regex]::Escape($_) })
         if (@($tokens).Count -gt 0) { $map[($tokens -join '\s+')] = '[SERIAL_1]' }
+    }
+    # App-crash app/module filenames are user-renamable labels (a self-named .exe/.dll could embed PII), so mask
+    # them in EVERY share-safe sink (all apply this map) - while the LOCAL report, which never applies the map,
+    # keeps the name for the helper. Only the main pipeline passes $diag; identity-only / test callers omit it, so
+    # existing flows are unchanged (no over-redaction). (In-house adversarial audit 2026-06-28.)
+    if ($diag) {
+        if ($diag.AppCrashApp)    { Add-NameRedaction $map ([string]$diag.AppCrashApp) '[APP]' }
+        if ($diag.AppCrashModule) { Add-NameRedaction $map ([string]$diag.AppCrashModule) '[MODULE]' }
     }
     return $map
 }
@@ -2826,10 +2845,18 @@ function New-SoEvidenceObject($sys, $diag, $stamp) {
             KbHash      = [string]$stamp.KbHash
             GitSha      = [string]$stamp.GitSha
         }
+        # Redact identifiers AT SOURCE (pre-serialization), not via the post-serialization Protect-Text pass:
+        # Windows PowerShell 5.1's ConvertTo-Json \u-escapes & < > ' (e.g. & -> &), moving a host/user/serial
+        # that contains one of those chars away from the raw map key so the final pass misses it - a decodable
+        # cleartext leak in the share-safe JSON on 5.1 (PS 7 keeps them literal). Host/user are identity by
+        # definition, so mask any non-empty value to its placeholder regardless of length (the map's <2-char skip,
+        # which protects prose, would otherwise leak a 1-char name here). The serial routes through Protect-Text so
+        # the non-identifying-serial exclusions (To Be Filled / Default string / all-zeros) are preserved. (In-house
+        # adversarial audit, 2026-06-28.)
         CaseIdentifiers = [pscustomobject][ordered]@{
-            ComputerName = [string]$sys.ComputerName
-            UserName     = [string]$sys.UserName
-            BiosSerial   = [string]$sys.BiosSerial
+            ComputerName = if ([string]$sys.ComputerName) { '[HOST_1]' } else { '' }
+            UserName     = if ([string]$sys.UserName) { '[USER_1]' } else { '' }
+            BiosSerial   = Protect-Text ([string]$sys.BiosSerial) (New-RedactionMap $sys)
         }
         System = [pscustomobject][ordered]@{
             OS           = [string]$sys.OS
@@ -3212,7 +3239,7 @@ function Build-RedactionAuditText($counts, $stamp) {
 }
 
 function New-HelperPacketArtifacts($sys, $diag, $map, $stamp) {
-    if (-not $map) { $map = New-RedactionMap $sys }
+    if (-not $map) { $map = New-RedactionMap $sys $diag }
     if (-not $stamp) { $stamp = Get-SoVersionStamp }
     $rawSummary = Build-HelperSummary $sys $diag $stamp
     $rawEvidence = Build-RedactedEvidenceJson $sys $diag $stamp
@@ -3327,7 +3354,14 @@ td.k{color:var(--muted);width:42%}
     [void]$sb.AppendLine($css)
     [void]$sb.AppendLine('</head><body><div class="wrap">')
     [void]$sb.AppendLine('<h1>Second Opinion</h1>')
-    [void]$sb.AppendLine("<p class=""sub"">$(ConvertTo-HtmlText $sys.ComputerName) &middot; last $Days days &middot; generated $genTime &middot; run $elev</p>")
+    # Redacted, share-safe report: render the host as the [HOST_1] placeholder directly - do NOT rely on the
+    # final Protect-Text map pass for the header. ConvertTo-HtmlText runs BEFORE that pass, so a PC name
+    # containing & / < / > (& is a valid Windows computer-name character) is HTML-encoded away from the raw map
+    # key and would survive unmasked; a 1-char name also bypasses the map's <2-char skip. ComputerName is the
+    # only map-masked value rendered into this HTML, so masking it here closes the header leak class. (In-house
+    # adversarial audit, 2026-06-28.)
+    $hostText = if ($redact) { '[HOST_1]' } else { ConvertTo-HtmlText $sys.ComputerName }
+    [void]$sb.AppendLine("<p class=""sub"">$hostText &middot; last $Days days &middot; generated $genTime &middot; run $elev</p>")
     [void]$sb.AppendLine('<div class="badges"><span class="badge b-green">read-only &middot; nothing changed</span><span class="badge b-blue">ai-prompt.txt &middot; key identifiers removed</span></div>')
     if ($redact) {
         [void]$sb.AppendLine('<div class="note">This is the REDACTED, share-safe report - key identifiers (PC name, user, serial, network addresses, profile paths) are removed on a best-effort basis (not guaranteed); hardware models are kept so a helper can still diagnose. Safe to share for help. The full local <span class="mono">report.html</span> is unredacted.</div>')
@@ -3654,7 +3688,7 @@ if (-not $redact) {
     Write-Host ''
     Write-Host 'WARNING: -NoRedact is set - ai-prompt.txt will contain UNREDACTED identifiers (username, hostname, BIOS serial). Keep it local; do not paste it into a public chat.' -ForegroundColor Yellow
 }
-$map = New-RedactionMap $sys
+$map = New-RedactionMap $sys $diag
 $prompt = Build-AiPrompt $sys $diag $map $redact
 Set-Content -Path $promptPath -Value $prompt -Encoding UTF8
 $packetInfo = $null

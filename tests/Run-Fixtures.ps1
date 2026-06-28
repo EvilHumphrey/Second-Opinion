@@ -985,6 +985,56 @@ foreach ($rc in $b3Checks) {
     else { Write-Host "VIOLATED  $($rc.N)" -ForegroundColor Red; $afail++ }
 }
 
+# ---- B3 encoding / edge-case leak-tests (in-house adversarial audit 2026-06-28): the redaction map keys are RAW
+#      values, but report.html HTML-encodes (& -> &amp;) and PS 5.1 ConvertTo-Json \u-escapes (& -> &) BEFORE
+#      the final Protect-Text pass, so an identifier containing & / < / > survived unmasked; a 1-char host also
+#      bypassed the map's <2-char skip. These lock the fixes (host rendered [HOST_1] in redact mode; CaseIdentifiers
+#      redacted at source pre-serialization). & is a documented-valid Windows computer-name character.
+$encSys = [pscustomobject]@{ ComputerName='R&D<BOX'; UserName='a&b'; BiosSerial='SN&12<3'; OS='Windows 11'; OSBuild='26200'; Manufacturer='ACME'; Model='Box'; CPU='CPU'; RAMGB=16; Gpu='NVIDIA RTX 3060'; RamModules=1; RamSpeed=0; XmpActive=$false; IsElevated=$true; UptimeText='1d'; LastBoot=$null }
+$encMap  = New-RedactionMap $encSys
+$encDiag = New-Diagnosis (_data @{})
+$encRed  = Render-Html $encSys $encDiag $encMap $true
+$encJson = [string]((New-HelperPacketArtifacts $encSys $encDiag $encMap $packetStamp)['redacted-evidence.json'])
+$oneSys  = [pscustomobject]@{ ComputerName='A'; UserName='B'; BiosSerial=''; OS='Windows 11'; OSBuild='26200'; Manufacturer='ACME'; Model='Box'; CPU='CPU'; RAMGB=16; Gpu=$null; RamModules=1; RamSpeed=0; XmpActive=$false; IsElevated=$true; UptimeText='1d'; LastBoot=$null }
+$oneMap  = New-RedactionMap $oneSys
+$oneRed  = Render-Html $oneSys (New-Diagnosis (_data @{})) $oneMap $true
+$oneJson = [string]((New-HelperPacketArtifacts $oneSys (New-Diagnosis (_data @{})) $oneMap $packetStamp)['redacted-evidence.json'])
+$encChecks = @(
+    @{ N = 'b3 enc: a PC name containing & is masked in the redacted report.html (HTML-encoding does not defeat the map)'; C = { ($encRed -notmatch 'R&amp;D') -and ($encRed -notmatch 'R&D') -and ($encRed -match '\[HOST_1\]') } }
+    @{ N = 'b3 enc: host/serial containing & < > are masked in redacted-evidence.json (PS 5.1 \u-escaping does not defeat the map)'; C = { ($encJson -notmatch 'R&D') -and ($encJson -notmatch 'R\\u0026D') -and ($encJson -notmatch 'SN&12') -and ($encJson -notmatch 'SN\\u0026') -and ($encJson -match '\[HOST_1\]') -and ($encJson -match '\[SERIAL_1\]') } }
+    @{ N = 'b3 edge: a 1-character PC name does not bypass redaction in the report.html header'; C = { ($oneRed -match '\[HOST_1\] &middot;') -and ($oneRed -notmatch '>A &middot;') } }
+    @{ N = 'b3 edge: a 1-character PC name is [HOST_1] in redacted-evidence.json (the map <2-char skip does not leak it)'; C = { ($oneJson -match '\[HOST_1\]') -and ($oneJson -notmatch '"ComputerName":\s*"A"') } }
+)
+foreach ($rc in $encChecks) {
+    $ok = $false
+    try { $ok = [bool](& $rc.C) } catch { $ok = $false }
+    if ($ok) { Write-Host "OK        $($rc.N)" -ForegroundColor Green; $apass++ }
+    else { Write-Host "VIOLATED  $($rc.N)" -ForegroundColor Red; $afail++ }
+}
+
+# ---- App-crash share-safe redaction (in-house audit 2026-06-28; operator decision = redact-share-safe-keep-local):
+#      the app-crash culprit shows the RAW faulting app + module filename - a user-renamable label that can embed
+#      PII (a self-named .exe/.dll). It is now masked to [APP]/[MODULE] in every share-safe sink (all apply the map,
+#      which the main pipeline builds with $diag) while the LOCAL report (no map) keeps the name for the helper.
+$acDiag   = New-Diagnosis (_data @{ AppCrashes = @(1, 2, 3 | ForEach-Object { _app 'AveryStone-SaveEditor.exe' 'AveryStonePlugin.dll' }) })
+$acMap    = New-RedactionMap $redSys $acDiag
+$acRed    = Render-Html $redSys $acDiag $acMap $true
+$acLocal  = Render-Html $redSys $acDiag
+$acPrompt = Build-AiPrompt $redSys $acDiag $acMap $true
+$acPkt    = New-HelperPacketArtifacts $redSys $acDiag $acMap $packetStamp
+$acShare  = $acRed + "`n" + $acPrompt + "`n" + ((@($acPkt.Values)) -join "`n")
+$acChecks = @(
+    @{ N = 'app-crash: the faulting app + module filename is masked ([APP]/[MODULE]) in every share-safe sink (redacted report.html + ai-prompt + packet)'; C = { ($acShare -notmatch 'AveryStone') -and ($acShare -notmatch 'SaveEditor') -and ($acRed -match '\[APP\]') -and ($acShare -match '\[MODULE\]') } }
+    @{ N = 'app-crash: the LOCAL (unredacted) report.html KEEPS the app name for the helper (redact-share-safe, keep-local)'; C = { ($acLocal -match 'AveryStone-SaveEditor\.exe') } }
+    @{ N = 'app-crash: a map built WITHOUT $diag (identity-only / test callers) adds no app keys - existing flows are not over-redacted'; C = { -not (@((New-RedactionMap $redSys).Keys) | Where-Object { $_ -match 'SaveEditor' }) } }
+)
+foreach ($rc in $acChecks) {
+    $ok = $false
+    try { $ok = [bool](& $rc.C) } catch { $ok = $false }
+    if ($ok) { Write-Host "OK        $($rc.N)" -ForegroundColor Green; $apass++ }
+    else { Write-Host "VIOLATED  $($rc.N)" -ForegroundColor Red; $afail++ }
+}
+
 # ---- No-script-path output contract (irm|iex / scriptblock web-run). The path bootstrap must NEVER
 #      Split-Path/Join-Path a null script path.
 #      With no script path: output defaults under the user's Documents (NEVER the current dir / System32) and
