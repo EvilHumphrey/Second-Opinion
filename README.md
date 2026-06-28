@@ -10,8 +10,9 @@ likely culprits, each with evidence for and against.** It then hands you two fil
 
 1. **`report.html`** — a self-contained report for you or the person helping you. It is **not redacted**
    (it shows the PC name and hardware), so share it only with your helper, never publicly.
-2. **`ai-prompt.txt`** — a ready-to-paste AI prompt with the **key identifiers removed** (username, PC name,
-   BIOS serial, MAC/IP — best-effort, not guaranteed). This is the one safe to paste into ChatGPT / Claude.
+2. **`ai-prompt.txt`** — a ready-to-paste AI prompt with **key identifiers removed on a best-effort basis**
+   (username, PC name, BIOS serial, network addresses, Windows profile path names, and raw device display names
+   that may carry personal labels — still not a guarantee). This is the one safe to paste into ChatGPT / Claude.
 
 Built for the person doing the helping. The friend with the broken PC just runs it (or you run it for them
 over Quick Assist) and sends back a file.
@@ -102,7 +103,7 @@ hash appears in `SHA256SUMS.txt`. A mismatch means a corrupted or interfered-wit
 | | |
 |---|---|
 | **Reads** (read-only) | Event Log crash / bugcheck / Kernel-Power-41 / WHEA / TDR / app-crash events; device status; drive SMART & reliability counters; volume free space; crash-dump policy |
-| **Writes** | only `report.html` and `ai-prompt.txt`, into the output folder you choose (default `.\out`) |
+| **Writes** | `report.html` + `ai-prompt.txt` into the output folder you choose (default `.\out`); with `-HelperPacket`, also the share-safe `out\packet\` files. Nothing else |
 | **Sends** | nothing — no network, ever. The AI step is *you* pasting a prompt into your own AI |
 | **Does NOT read** | your documents, browser history, emails, or personal files |
 
@@ -150,13 +151,19 @@ All read-only, all local — it reads (never writes) these and fuses them into t
 - Problem devices from Device Manager and application-crash events.
 - Optionally, your answers to a short symptom questionnaire (stored as integer codes — no free text).
 
-## Privacy & the two artifacts
+## Privacy & what's safe to share
 
-`report.html` is **unredacted** (PC name + hardware) — for your trusted helper only, never public.
-`ai-prompt.txt` has key identifiers removed on a **best-effort** basis (not a guarantee) — it's the
-share-safe one. There is no redacted HTML report yet; for public sharing, use `ai-prompt.txt`. Found an
-identifier that survives into `ai-prompt.txt`? That's a bug worth reporting — see [`SECURITY.md`](SECURITY.md)
-(please don't paste the surviving identifier into a public issue).
+`report.html` is **unredacted** (PC name + hardware) — for your trusted helper only, never public. For anything
+public — an AI, a forum, Discord, GitHub, screenshots — share the **redacted packet** instead.
+
+- **Safe to share:** `out\ai-prompt.txt`, and the `out\packet\` files from `-HelperPacket`
+  (`helper-summary.md`, `redacted-evidence.json`, `redaction-audit.txt`, `unreadable-signals.txt`).
+- **Don't post publicly:** `report.html`, the whole `out` folder, screenshots of `report.html`, or anything
+  you haven't checked for personal details.
+
+Redaction is **best-effort, not a guarantee**, and there is no redacted HTML report yet — for public sharing,
+use the redacted packet. Found an identifier that survives into `ai-prompt.txt`? That's a bug worth reporting —
+see [`SECURITY.md`](SECURITY.md) (please don't paste the surviving identifier into a public issue).
 
 ## Known limitations (v0, on purpose)
 
@@ -182,6 +189,26 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\Run-Fixtures.ps1
 
 Architecture and the abstention/guardrail rationale live in [`docs/DESIGN.md`](docs/DESIGN.md);
 contributors, see [`CONTRIBUTING.md`](CONTRIBUTING.md).
+
+## FAQ
+
+**Which file do I paste into an AI or send to a helper?** The redacted text packet — `out\ai-prompt.txt`, or
+the `out\packet\` files if you ran with `-HelperPacket`. Not `report.html`.
+
+**Can I post `report.html` publicly?** No — it's the full unredacted report (PC name + hardware). For public
+help, forums, Discord, GitHub, or screenshots, use the redacted packet instead.
+
+**Is this a WinDbg / Sysinternals replacement?** No. It's a ranked pre-triage handoff that gives a human the
+honest short list and the cheapest confirm step — it doesn't replace deep debugging or a forum collector package.
+
+**Why does it sometimes say "inconclusive" instead of naming a culprit?** Because guessing is worse than
+abstaining. It says what it could read, what it couldn't, and what to capture next — it won't turn one weak clue
+into a verdict or send you to RMA hardware on a guess.
+
+**What does it read, and what does it never do?** It reads local Windows diagnostic signals (crash history,
+restart and hardware-error events, drive health, devices, app crashes, dump policy) and **never** installs
+anything, changes settings, edits the registry, uploads files, or contacts a server. Run `-WhatItReads` to see
+the full read list before trusting it; delete the `out` folder when you're done if you don't want to keep it.
 
 ## Troubleshooting
 

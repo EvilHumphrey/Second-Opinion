@@ -3293,7 +3293,7 @@ td.k{color:var(--muted);width:42%}
     [void]$sb.AppendLine('<h1>Second Opinion</h1>')
     [void]$sb.AppendLine("<p class=""sub"">$(ConvertTo-HtmlText $sys.ComputerName) &middot; last $Days days &middot; generated $genTime &middot; run $elev</p>")
     [void]$sb.AppendLine('<div class="badges"><span class="badge b-green">read-only &middot; nothing changed</span><span class="badge b-blue">ai-prompt.txt &middot; key identifiers removed</span></div>')
-    [void]$sb.AppendLine('<div class="note">Sharing note: this report (report.html) is NOT redacted - it shows your PC name and hardware, so share it only with the person helping you. For public help or pasting into an AI, use <span class="mono">out\ai-prompt.txt</span> instead (your username, PC name, and BIOS serial are removed - best-effort, not guaranteed).</div>')
+    [void]$sb.AppendLine('<div class="note">Sharing note: this report (report.html) is NOT redacted - it shows your PC name and hardware, so share it only with the person helping you. For public help or pasting into an AI, use the redacted packet <span class="mono">out\ai-prompt.txt</span> (or <span class="mono">out\packet\</span> from -HelperPacket) instead - key identifiers removed best-effort, not guaranteed.</div>')
 
     # Headline - the deterministic bottom line, styled by severity (clean=green, blind/suspect=amber
     # warning, weak/possible/partial=blue). Never "your PC is healthy"; a blind run shouts MISSING DATA.
@@ -3389,7 +3389,7 @@ td.k{color:var(--muted);width:42%}
         [void]$sb.AppendLine('</table></div>')
     }
 
-    [void]$sb.AppendLine('<div class="foot">This is a read-only second opinion, not a verdict. Confirm before acting. To go deeper, paste <span class="mono">out\ai-prompt.txt</span> (key identifiers removed, best-effort) into ChatGPT or Claude. The full report.html is NOT redacted - keep it between you and your helper.</div>')
+    [void]$sb.AppendLine('<div class="foot">This is a read-only second opinion, not a verdict. Confirm before acting. For public help or AI help, use the redacted packet <span class="mono">out\ai-prompt.txt</span> (or <span class="mono">out\packet\</span> from -HelperPacket) - key identifiers removed best-effort. This full report.html is NOT redacted - keep it between you and your helper.</div>')
     [void]$sb.AppendLine('</div></body></html>')
     return $sb.ToString()
 }

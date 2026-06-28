@@ -53,9 +53,9 @@ td.k{color:var(--muted);width:42%}
 </style>
 </head><body><div class="wrap">
 <h1>Second Opinion</h1>
-<p class="sub">DESKTOP-EXAMPLE &middot; last 30 days &middot; generated 2026-06-27 16:10 &middot; run standard (some detailed SMART/device data needs elevation)</p>
+<p class="sub">DESKTOP-EXAMPLE &middot; last 30 days &middot; generated 2026-06-27 22:04 &middot; run standard (some detailed SMART/device data needs elevation)</p>
 <div class="badges"><span class="badge b-green">read-only &middot; nothing changed</span><span class="badge b-blue">ai-prompt.txt &middot; key identifiers removed</span></div>
-<div class="note">Sharing note: this report (report.html) is NOT redacted - it shows your PC name and hardware, so share it only with the person helping you. For public help or pasting into an AI, use <span class="mono">out\ai-prompt.txt</span> instead (your username, PC name, and BIOS serial are removed - best-effort, not guaranteed).</div>
+<div class="note">Sharing note: this report (report.html) is NOT redacted - it shows your PC name and hardware, so share it only with the person helping you. For public help or pasting into an AI, use the redacted packet <span class="mono">out\ai-prompt.txt</span> (or <span class="mono">out\packet\</span> from -HelperPacket) instead - key identifiers removed best-effort, not guaranteed.</div>
 <div class="headline hl-warn">Prime suspect: GPU display driver (NVIDIA GeForce RTX 3060 Ti) (confidence: high).</div>
 <div class="note">2 system crash(es) across 1 stop code(s), 37 unexplained restart(s), 3 app crash event(s) in the window.</div>
 <div class="note">All 2 system crashes share one stop code (0x116) - a consistent pattern leans toward a single software/driver cause.</div>
@@ -107,6 +107,7 @@ td.k{color:var(--muted);width:42%}
 <tr><td class="k">Crash / bugcheck history</td><td><span class="rd-ok">read</span></td></tr>
 <tr><td class="k">Hardware-error log (WHEA)</td><td><span class="rd-ok">read</span></td></tr>
 <tr><td class="k">Drive health (SMART rollup)</td><td><span class="rd-ok">read</span></td></tr>
+<tr><td class="k">Drive health (detailed SMART / wear)</td><td><span class="rd-no">NOT read - re-run elevated</span></td></tr>
 <tr><td class="k">Disk space (volumes)</td><td><span class="rd-ok">read</span></td></tr>
 <tr><td class="k">Windows Update failures</td><td><span class="rd-ok">read</span></td></tr>
 <tr><td class="k">Problem devices</td><td><span class="rd-ok">read</span></td></tr>
@@ -130,5 +131,5 @@ td.k{color:var(--muted);width:42%}
 </table></div>
 <div class="section-label">Drives</div><div class="card"><table>
 </table></div>
-<div class="foot">This is a read-only second opinion, not a verdict. Confirm before acting. To go deeper, paste <span class="mono">out\ai-prompt.txt</span> (key identifiers removed, best-effort) into ChatGPT or Claude. The full report.html is NOT redacted - keep it between you and your helper.</div>
+<div class="foot">This is a read-only second opinion, not a verdict. Confirm before acting. For public help or AI help, use the redacted packet <span class="mono">out\ai-prompt.txt</span> (or <span class="mono">out\packet\</span> from -HelperPacket) - key identifiers removed best-effort. This full report.html is NOT redacted - keep it between you and your helper.</div>
 </div></body></html>

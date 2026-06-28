@@ -46,4 +46,5 @@ Note: Drive health - Windows reports basic status Healthy, but detailed SMART wa
  - Devices - no problem devices in Device Manager.
  - Hardware-error log (WHEA) - clean.
 
-=== READABILITY: all signals were readable this pass. ===
+=== SIGNALS NOT READ THIS PASS (treat as UNKNOWN, not clean - re-run elevated) ===
+ - Drive health (detailed SMART / wear)
