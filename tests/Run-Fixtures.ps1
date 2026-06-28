@@ -808,6 +808,63 @@ foreach ($rc in $deepInjChecks) {
     else { Write-Host "VIOLATED  $($rc.N)" -ForegroundColor Red; $afail++ }
 }
 
+# ---- Sink-level share-safe audit (B10): B9 hardened the redaction PRIMITIVE (Protect-Text + New-RedactionMap);
+#      this hardens the SINKS - is PII masked END-TO-END in each shareable artifact, and is there PII that never
+#      ENTERS the redaction map? A Hermes read-only sink audit traced every shareable artifact and found
+#      machine-derived strings OUTSIDE the map reaching redacted sinks. Real gaps fixed + locked in here:
+#      G1 a deep-dump PATH and G3 a faulting-MODULE path can carry a profile folder (C:\Users\Avery Stone\...) the
+#      map never knew (SAM UserName may DIFFER from the profile/full name) -> central Get-UserPathRedactionPattern
+#      masks the \Users\<segment> folder in ALL sinks; G2 a Display problem-device FriendlyName (user-renamable to
+#      PII) rode a GPU For-line into every sink -> ProblemText only now, like the P2-1 non-display fix; G4 the
+#      baseline diff inherits the path fix (a tainted prior line is re-redacted). Plus NO-CURRENT-LEAK guards so a
+#      future refactor cannot regress: NG1 user-set volume labels never emitted, NG2 the non-display device name
+#      is absent from the PACKET too (P2-1 asserted only Title + prompt), NG3 acceptable hardware detail
+#      (CPU/GPU model, stop code) is NOT over-redacted. Behavior observed identical on PS 5.1 + 7. RESIDUAL
+#      (documented, optional): an arbitrary NAS/UNC SHARE folder OUTSIDE \Users\ (\\NAS\share\Name\) is not masked
+#      - rare (needs WER dumps on a network share + -DeepDump). Golden-neutral (a Protect-Text change + a For-line
+#      that is not in the fingerprint).
+$skSys = [pscustomobject]@{
+    ComputerName = 'DESKTOP-AVERY'; UserName = 'astone'; OS = 'Windows 11'; OSBuild = '26200'
+    Manufacturer = 'ACME'; Model = 'Box'; CPU = 'AMD Ryzen 7 7800X3D 8-Core Processor'; RAMGB = 32; BiosSerial = 'SN-SINK-01'
+    LastBoot = $null; UptimeText = '0d 0h'; Gpu = 'NVIDIA GeForce RTX 4090'; RamModules = 2; RamSpeed = 6000; XmpActive = $true; IsElevated = $false
+}
+$skMap = New-RedactionMap $skSys
+$skPathLeak = @('C:\Users\Avery Stone\AppData\Local\Temp\plugin.dll', '\Users\Avery Stone\Desktop\d.dmp', 'file:///C:/Users/Avery%20Stone/x.dmp', 'C:\\Users\\Avery Stone\\y.dmp', 'c:\users\bob\ntuser.dat')
+$skPathLeakOut = @($skPathLeak | ForEach-Object { Protect-Text $_ $skMap })
+$skPathKeep = @('C:\Windows\MEMORY.DMP', 'C:\Windows\Minidump\01.dmp', 'C:\Program Files\NVIDIA Corporation\app.exe', 'the Users of this PC report crashes')
+$skPathKeepOut = @($skPathKeep | ForEach-Object { Protect-Text $_ $skMap })
+$skDispDiag = New-Diagnosis (_data @{ ProblemDevices = @( (_pdev 'Avery Stone eGPU RTX 4090' 'Display' 43 'Windows stopped it - device reported a problem (Code 43)') ); GpuModel = 'NVIDIA GeForce RTX 4090' })
+$skDispAll = (Build-AiPrompt $skSys $skDispDiag $skMap $true) + "`n" + ((@((New-HelperPacketArtifacts $skSys $skDispDiag $skMap $packetStamp).Values)) -join "`n")
+$skDeep = [pscustomobject]@{ Requested = $true; Status = 'debugger-failed'; Path = 'C:\Users\Avery Stone\AppData\Local\CrashDumps\game.dmp'; Notes = @(); BugcheckCode = '0x116'; BugcheckParameters = @(); ModuleName = ''; FaultingAddress = $null; IsThirdParty = $false; Tool = ''; Detail = '' }
+$skDeepPrompt = Build-AiPrompt $skSys (New-Diagnosis (_data @{ DeepDump = $skDeep; Crashes = @( (_crash -1 'BugCheck 1001' '0x116') ) })) $skMap $true
+$skApp = @(1..3 | ForEach-Object { (_app 'game.exe' 'C:\Users\Avery Stone\AppData\Local\Temp\plugin.dll') })
+$skAppPrompt = Build-AiPrompt $skSys (New-Diagnosis (_data @{ AppCrashes = $skApp })) $skMap $true
+$skVolDiag = New-Diagnosis (_data @{ SystemDrive = 'C:'; Volumes = @( [pscustomobject]@{ Drive = 'E:'; Label = "Avery's Backup"; FreeGB = 5; SizeGB = 500; FreePct = 1; Low = $true } ) })
+$skVolAll = (Build-AiPrompt $skSys $skVolDiag $skMap $true) + "`n" + ((@((New-HelperPacketArtifacts $skSys $skVolDiag $skMap $packetStamp).Values)) -join "`n")
+$skNonDispPacket = (@((New-HelperPacketArtifacts $probeSys $diags['device-pii-name'] (New-RedactionMap $probeSys) $packetStamp).Values)) -join "`n"
+$skHwPrompt = Build-AiPrompt $skSys (New-Diagnosis (_data @{ Crashes = @( (_crash -1 'BugCheck 1001' '0x116') ); GpuModel = 'NVIDIA GeForce RTX 4070 Ti SUPER' })) $skMap $true
+$skTaintDiff = [pscustomobject]@{ Usable = $true; Status = 'compared'; Lines = @('New observed weak signal: dump at C:\Users\Avery Stone\Desktop\dump.dmp') }
+$skTaintDiag = New-Diagnosis (_data @{})
+$skTaintDiag | Add-Member -NotePropertyName BaselineDiff -NotePropertyValue $skTaintDiff -Force
+$skTaintAll = (Build-AiPrompt $skSys $skTaintDiag $skMap $true) + "`n" + ((@((New-HelperPacketArtifacts $skSys $skTaintDiag $skMap $packetStamp).Values)) -join "`n")
+$sinkChecks = @(
+    @{ N = 'sink-audit (G1/G3): Protect-Text masks the \Users\ profile-folder segment across drive/root/file-URI/JSON/lowercase forms'; C = { (-not (@($skPathLeakOut) | Where-Object { $_ -match 'Avery|Stone|bob' })) -and (-not (@($skPathLeakOut) | Where-Object { $_ -notmatch '\[USER\]' })) } }
+    @{ N = 'sink-audit (G1/G3): non-\Users\ system paths, Program Files, and prose are NOT over-redacted'; C = { (@($skPathKeepOut) -join '|') -eq (@($skPathKeep) -join '|') } }
+    @{ N = 'sink-audit (G2): a Display problem-device PII name is absent from EVERY redacted sink (prompt + packet); ProblemText + GPU model kept'; C = { ($skDispAll -notmatch 'Avery|Stone') -and ($skDispAll -match 'Code 43') -and ($skDispAll -match 'NVIDIA GeForce RTX 4090') } }
+    @{ N = 'sink-audit (G1): a deep-dump profile path is masked in ai-prompt.txt (folder gone; C:\Users\[USER] structure + .dmp leaf kept)'; C = { ($skDeepPrompt -notmatch 'Avery Stone') -and ($skDeepPrompt -match 'C:\\Users\\\[USER\]') -and ($skDeepPrompt -match 'game\.dmp') } }
+    @{ N = 'sink-audit (G3): a faulting-module profile path is masked in ai-prompt.txt (folder gone; plugin.dll kept)'; C = { ($skAppPrompt -notmatch 'Avery Stone') -and ($skAppPrompt -match 'plugin\.dll') } }
+    @{ N = 'sink-audit (G4): a tainted baseline-diff line with a profile path is re-redacted before sharing'; C = { ($skTaintAll -notmatch 'Avery Stone') -and ($skTaintAll -match '\[USER\]') } }
+    @{ N = 'sink-audit (NG1): a user-set volume label never reaches a shareable artifact (the low-disk drive is still reported)'; C = { ($skVolAll -notmatch 'Avery|Backup') -and ($skVolAll -match 'E:') } }
+    @{ N = 'sink-audit (NG2): a non-display problem-device FriendlyName is absent from the helper packet + evidence JSON (not just the prompt)'; C = { ($skNonDispPacket -notmatch 'Jordan') -and ($skNonDispPacket -match 'Problem device|Bluetooth|Code') } }
+    @{ N = 'sink-audit (NG3): acceptable hardware detail (CPU/GPU model, stop code) is preserved, not over-redacted'; C = { ($skHwPrompt -match 'AMD Ryzen 7 7800X3D') -and ($skHwPrompt -match 'RTX 4070 Ti SUPER') -and ($skHwPrompt -match '0x116') } }
+)
+foreach ($rc in $sinkChecks) {
+    $ok = $false
+    try { $ok = [bool](& $rc.C) } catch { $ok = $false }
+    if ($ok) { Write-Host "OK        $($rc.N)" -ForegroundColor Green; $apass++ }
+    else { Write-Host "VIOLATED  $($rc.N)" -ForegroundColor Red; $afail++ }
+}
+
 # ---- Low-disk system-drive awareness (brainstorm c3-3 / verified bug): a full SYSTEM drive is a real
 #      instability culprit (tier-2 High), but a full NON-system data drive is advisory only (Low) and must
 #      NOT claim it causes Windows instability - else a near-full data drive is a confident red herring.

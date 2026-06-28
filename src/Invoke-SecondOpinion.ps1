@@ -1621,7 +1621,12 @@ function New-Diagnosis($data) {
     $gpuCodes = @('0x116', '0x117', '0x119') | Where-Object { $codesPresent -contains $_ }
     if ($gpuCodes.Count -gt 0) { $gpuFor += "GPU bugcheck(s) present: $($gpuCodes -join ', ')."; $gpuSig += 3 }
     $gpuDevs = @($data.ProblemDevices | Where-Object { $_.Class -eq 'Display' })
-    if ($gpuDevs.Count -gt 0) { $gpuFor += "Display adapter '$($gpuDevs[0].Name)' is flagged: $($gpuDevs[0].ProblemText)."; $gpuSig += 3 }
+    # P2-1 (sink audit G2): a Display problem-device FriendlyName can be user-renamed to carry PII (e.g. an eGPU
+    # named after its owner) that the redaction map cannot know, and this For-line rides into every share-safe
+    # sink. Render the device's ProblemText only - NOT the raw $gpuDevs[0].Name. The GPU model is already
+    # preserved in this node's title (from data.GpuModel / sys.Gpu), so no hardware detail is lost; this matches
+    # the non-display problem-device treatment below.
+    if ($gpuDevs.Count -gt 0) { $gpuFor += "A Display-class adapter is flagged in Device Manager: $($gpuDevs[0].ProblemText)."; $gpuSig += 3 }
     $gpuVendCount = 0; $gpuVendor = ''
     if ($data.GpuVendorEvents) { $gpuVendCount = [int]$data.GpuVendorEvents.Count; $gpuVendor = [string]$data.GpuVendorEvents.Vendor }
     if ($gpuVendCount -ge 1) {
@@ -1807,7 +1812,8 @@ function New-Diagnosis($data) {
         # Bluetooth peripheral named after its owner) embeds third-party PII the redaction map cannot know, and it
         # would ride into the share-safe Helper Packet + the redacted AI prompt. Render the device CLASS +
         # ProblemText only - the tier/confidence never depended on the literal name, and the report's System table
-        # still lists the hardware. (Display devices are excluded above; they go through the GPU rule.)
+        # still lists the hardware. (Display devices are handled in the GPU rule above, which now drops the raw
+        # name the same way - audit G2.)
         $titleCls = if ([string]::IsNullOrWhiteSpace($pd.Class)) { '' } else { " ($($pd.Class))" }
         $culprits += New-Culprit -Title "Problem device$titleCls" -TierClass 'driver' -Tier 2 -Confidence 'Medium' `
             -For @("$clsLabel device flagged in Device Manager: $($pd.ProblemText).") -Against @() `
@@ -2405,10 +2411,31 @@ function Get-Ipv4RedactionPattern {
     '\b(25[0-5]|2[0-4]\d|[01]?\d\d?)(\.(25[0-5]|2[0-4]\d|[01]?\d\d?)){3}\b'
 }
 
+function Get-UserPathRedactionPattern {
+    # Mask ONLY the profile-folder segment right after \Users\ so a Windows profile path leaks neither the
+    # account name NOR a human full name when they DIFFER from the SAM UserName the map masks (sink-level audit
+    # G1/G3: a deep-dump path or a faulting-module path can carry C:\Users\Avery Stone\... even when $env:USERNAME
+    # is "astone"). Matches drive (C:\Users\Name\), root-relative (\Users\Name\), UNC (\\HOST\C$\Users\Name\),
+    # forward-slash / file-URI (file:///C:/Users/Name%20Last/), and JSON-escaped (C:\\Users\\Name\\) forms - the
+    # separator class [\\/]+ absorbs single, double, and forward slashes; the segment ([^\\/]+) may contain spaces.
+    # Path STRUCTURE is preserved (C:\Users\[USER]\AppData\...) and any NON-\Users\ path (C:\Windows\MEMORY.DMP,
+    # C:\Program Files\...) is never touched, so system dump paths, versions, and hardware strings cannot be
+    # over-redacted. A non-user folder like \Users\Public is harmlessly masked too (fails safe). Validated against
+    # the leak + preserve corpus before shipping; the "Sink-level share-safe audit" guardrails lock it in. The
+    # segment's first char excludes '[' so an already-mapped placeholder (C:\Users\[USER_1]) is left intact when
+    # the SAM UserName equals the folder - no double-masking; the map keeps that case, this rule adds the mismatch.
+    '(?i)((?:[A-Za-z]:)?[\\/]+Users[\\/]+)([^\\/\[][^\\/]*)'
+}
+
 function Protect-Text($text, $map) {
     if (-not $text) { return $text }
     $t = [string]$text
     foreach ($k in $map.Keys) { $t = $t -replace $k, $map[$k] }
+    # Profile-path folder AFTER the map: when the SAM UserName equals the folder, the map already masked it to
+    # [USER_1] (the segment skips '[' so it stays as-is); when they DIFFER (SAM 'astone' vs folder 'Avery Stone'),
+    # the map missed it and this masks the \Users\<segment> folder to [USER] - the sink-level path leak the map
+    # alone cannot close.
+    $t = [regex]::Replace($t, (Get-UserPathRedactionPattern), '${1}[USER]')
     $t = [regex]::Replace($t, '\b([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}\b', '[MAC]')
     $t = [regex]::Replace($t, (Get-Ipv6RedactionPattern), '[IPV6]')
     $t = [regex]::Replace($t, (Get-Ipv4RedactionPattern), '[IP]')
