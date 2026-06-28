@@ -2426,6 +2426,14 @@ function New-Diagnosis($data) {
 # ---------------------------------------------------------------------------
 # PII redaction (applied to the AI prompt by default - the report stays local)
 # ---------------------------------------------------------------------------
+function ConvertTo-JsonEscapedName($s) {
+    # Mirror Windows PowerShell 5.1 ConvertTo-Json's \u-escaping of the chars that ALSO appear in a host/user/
+    # app/module name: & < > ' (PS 7 leaves them literal, so the raw key already matches there). Lets a name that
+    # was \u-escaped into redacted-evidence.json on 5.1 still match its redaction-map key.
+    $bs = [char]0x5C   # backslash via code point, so the literal escape sequence is not pre-decoded anywhere
+    ([string]$s) -replace '&', ($bs + 'u0026') -replace '<', ($bs + 'u003c') -replace '>', ($bs + 'u003e') -replace "'", ($bs + 'u0027')
+}
+
 function Add-NameRedaction($map, $value, $replacement) {
     if (-not $value) { return }
     $s = ([string]$value).Trim()
@@ -2433,7 +2441,16 @@ function Add-NameRedaction($map, $value, $replacement) {
     # share-safe packet. The token-boundary pattern below keeps prose substrings intact (e.g. 'al' redacts the
     # standalone word but not 'algorithm'). 1-char names are excluded - as a whole token they shred ordinary prose.
     if ($s.Length -lt 2) { return }
-    $map["(?<![A-Za-z0-9_])$([regex]::Escape($s))(?![A-Za-z0-9_])"] = $replacement
+    # The redacted sinks ENCODE before the final Protect-Text pass: report.html HTML-encodes (& -> &amp;) and
+    # Windows PowerShell 5.1 ConvertTo-Json \u-escapes (& -> &). A key built from the RAW value misses the
+    # encoded form, so register a key for the raw value AND its HTML- and JSON-escaped variants -> same
+    # placeholder. (In-house P1 + Codex review, 2026-06-28: this is how a host with '&' and a self-named app/module
+    # filename with '&' leaked into the share-safe report.html / evidence JSON.) Plain names (no & < > ') dedupe to
+    # a single key, so common names add no extra entries.
+    $variants = @($s, (ConvertTo-HtmlText $s), (ConvertTo-JsonEscapedName $s)) | Select-Object -Unique
+    foreach ($v in $variants) {
+        $map["(?<![A-Za-z0-9_])$([regex]::Escape($v))(?![A-Za-z0-9_])"] = $replacement
+    }
 }
 
 function New-RedactionMap($sys, $diag = $null) {

@@ -1035,6 +1035,29 @@ foreach ($rc in $acChecks) {
     else { Write-Host "VIOLATED  $($rc.N)" -ForegroundColor Red; $afail++ }
 }
 
+# ---- App-crash & encoding leak-test (Codex B3 review 2026-06-28): an app/module filename containing & is added to
+#      the redaction map as a RAW key, but report.html HTML-encodes (& -> &amp;) and PS 5.1 ConvertTo-Json
+#      \u-escapes (& -> the & form) BEFORE the final Protect-Text pass, so the raw key missed and the
+#      self-named label leaked into the share-safe packet. Locks the fix (Add-NameRedaction now registers the HTML +
+#      JSON-\u variants of every mapped name). Repro names are Codex's.
+$acAmpDiag  = New-Diagnosis (_data @{ AppCrashes = @(1, 2, 3 | ForEach-Object { _app 'Avery&Stone-SaveEditor.exe' 'Avery&StonePlugin.dll' }) })
+$acAmpMap   = New-RedactionMap $redSys $acAmpDiag
+$acAmpRed   = Render-Html $redSys $acAmpDiag $acAmpMap $true
+$acAmpLocal = Render-Html $redSys $acAmpDiag
+$acAmpPkt   = New-HelperPacketArtifacts $redSys $acAmpDiag $acAmpMap $packetStamp
+$acAmpShare = $acAmpRed + "`n" + (Build-AiPrompt $redSys $acAmpDiag $acAmpMap $true) + "`n" + ((@($acAmpPkt.Values)) -join "`n")
+$acAmpUpat  = 'Avery' + [char]0x5C + 'u0026Stone'   # the PS 5.1 ConvertTo-Json escaped form, built to avoid pre-decode
+$acAmpChecks = @(
+    @{ N = 'app-crash enc: an app/module filename containing & is masked ([APP]/[MODULE]) in every share-safe sink - HTML &amp; and PS 5.1 \u escaping do not defeat the map'; C = { ($acAmpShare -notmatch 'Avery&Stone') -and ($acAmpShare -notmatch 'Avery&amp;Stone') -and ($acAmpShare -notmatch $acAmpUpat) -and ($acAmpRed -match '\[APP\]') -and ($acAmpShare -match '\[MODULE\]') } }
+    @{ N = 'app-crash enc: the LOCAL (unredacted) report.html still keeps the & app name for the helper (HTML-encoded form)'; C = { ($acAmpLocal -match 'Avery&amp;Stone-SaveEditor\.exe') } }
+)
+foreach ($rc in $acAmpChecks) {
+    $ok = $false
+    try { $ok = [bool](& $rc.C) } catch { $ok = $false }
+    if ($ok) { Write-Host "OK        $($rc.N)" -ForegroundColor Green; $apass++ }
+    else { Write-Host "VIOLATED  $($rc.N)" -ForegroundColor Red; $afail++ }
+}
+
 # ---- No-script-path output contract (irm|iex / scriptblock web-run). The path bootstrap must NEVER
 #      Split-Path/Join-Path a null script path.
 #      With no script path: output defaults under the user's Documents (NEVER the current dir / System32) and
