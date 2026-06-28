@@ -675,10 +675,19 @@ function Get-DumpModuleDisplayName($module) {
     return $name
 }
 
+function Get-SafeModuleBase($name) {
+    # Lower-cased base module name (no extension) WITHOUT [IO.Path]::GetFileNameWithoutExtension - that .NET call
+    # THROWS "Illegal characters in path" on Windows PowerShell 5.1 when a hostile/corrupt dump supplies a module
+    # name containing < > | " (trust audit, robustness). A read-only diagnostic must ABSTAIN on a bad dump, never
+    # throw, so extract the leaf + strip the final extension with plain string ops, which never throw. Matches
+    # GetFileNameWithoutExtension for clean names (golden-neutral); just fail-safe on hostile ones.
+    $leaf = ([string]$name) -replace '^.*[\\/]', ''   # drop everything up to the last slash/backslash
+    return ($leaf -replace '\.[^.]*$', '').ToLowerInvariant()  # drop the final extension
+}
+
 function Test-GenericOsModuleName($name) {
     if ([string]::IsNullOrWhiteSpace($name)) { return $true }
-    $leaf = Split-Path -Leaf ([string]$name)
-    $base = [IO.Path]::GetFileNameWithoutExtension($leaf).ToLowerInvariant()
+    $base = Get-SafeModuleBase $name
     $generic = @(
         'nt', 'ntoskrnl', 'ntkrnlmp', 'ntkrnlpa', 'ntkrpamp', 'hal', 'kdcom', 'bootvid',
         'pshed', 'clfs', 'tm', 'ci', 'msrpc', 'werkernel', 'win32k', 'win32kbase',
@@ -695,8 +704,7 @@ function Test-GenericOsModuleName($name) {
 }
 
 function Get-DeepDumpModuleClass($name) {
-    $leaf = Split-Path -Leaf ([string]$name)
-    $base = [IO.Path]::GetFileNameWithoutExtension($leaf).ToLowerInvariant()
+    $base = Get-SafeModuleBase $name
     if ($base -match '^(nvlddmkm|nvlddmkmoc|amdkmdag|amdwddmg|atikmdag|atikmpag|igdkmd64|igdkmd32|igfx|igfxn|igfxcuiservice)') {
         return 'gpu'
     }
@@ -1598,10 +1606,15 @@ function New-Diagnosis($data) {
 
     # A. Failing drive - a confirmed fact, highest confidence.
     foreach ($bd in $badDrives) {
-        $culprits += New-Culprit -Title "Drive health: $($bd.Name)" -TierClass 'drive' -Tier 1 -Confidence 'High' `
+        # P2-1 / B10 redaction class (trust audit): a drive FriendlyName can be a user-assignable label on an
+        # external/USB drive (third-party PII the redaction map cannot know), and it rode raw into every
+        # share-safe sink (ai-prompt.txt + packet). Render the drive by Media + size only - name-free - like the
+        # device-name fixes; report.html's drive table still shows the full model for the trusted local helper.
+        $mediaLabel = if ([string]::IsNullOrWhiteSpace($bd.Media)) { 'drive' } else { [string]$bd.Media }
+        $culprits += New-Culprit -Title "Drive health: a failing $mediaLabel ($($bd.SizeGB) GB)" -TierClass 'drive' -Tier 1 -Confidence 'High' `
             -For @("Windows reports this drive's SMART health status as '$($bd.HealthStatus)'.") -Against @() `
             -ConfirmBy 'Back up important data now, then confirm with a full SMART read (CrystalDiskInfo / smartctl). Plan to replace the drive.' `
-            -Search "$($bd.Name) SMART $($bd.HealthStatus) failing replace"
+            -Search "$mediaLabel SMART $($bd.HealthStatus) failing replace"
     }
 
     # B. WHEA / 0x124 - always hardware.
@@ -2228,10 +2241,16 @@ function New-Diagnosis($data) {
     # must not flash "all clean"). When not requested, perf is absent and never affects AllReadable.
     $perfAllReadable = $true
     if ($perfRequested) { $perfAllReadable = ([bool]$perf.ThrottleReadable -and [bool]$perf.LowMemoryReadable) }
+    # Detailed per-drive SMART (Get-StorageReliabilityCounter) needs elevation; on a non-elevated run the rollup
+    # reads Healthy while per-drive detail is unreadable. That MUST fold into AllReadable, or an otherwise-clean
+    # non-elevated box flashes the green "clean" banner + tells the AI "all signals were readable" while detailed
+    # SMART was never read - the "blank SMART != healthy" false-clean the design forbids (trust audit). Readable
+    # when no present drive has ReliabilityReadable=$false (rollup-unreadability is already caught by DrivesReadable).
+    $detailedSmartReadable = (@($data.Drives | Where-Object { -not $_.ReliabilityReadable }).Count -eq 0)
     $allReadable = ([bool]$data.CrashesReadable -and [bool]$data.DrivesReadable -and [bool]$data.VolumesReadable -and [bool]$data.UpdatesReadable -and [bool]$data.DevicesReadable -and [bool]$data.Whea.Readable -and `
             [bool]$data.TdrReadable -and [bool]$data.GpuVendorReadable -and [bool]$data.StorageReadable -and [bool]$data.DumpFailuresReadable -and [bool]$data.AppCrashesReadable -and [bool]$data.MemDiagReadable -and `
             [bool]$dirtyShutdowns.Readable -and [bool]$liveKernelEvents.Readable -and [bool]$storageCorroborators.Readable -and [bool]$smartPredictiveFailures.Readable -and `
-            $perfAllReadable)
+            $perfAllReadable -and $detailedSmartReadable)
 
     # The green "came back clean" banner shows ONLY when every signal was readable AND there are no
     # culprits AND no observed weak signals - so corrected WHEA, sub-threshold storage, or update
@@ -2271,6 +2290,7 @@ function New-Diagnosis($data) {
         [pscustomobject]@{ Signal = 'Crash / bugcheck history';     Readable = [bool]$data.CrashesReadable }
         [pscustomobject]@{ Signal = 'Hardware-error log (WHEA)';    Readable = [bool]$data.Whea.Readable }
         [pscustomobject]@{ Signal = 'Drive health (SMART rollup)';  Readable = [bool]$data.DrivesReadable }
+        [pscustomobject]@{ Signal = 'Drive health (detailed SMART / wear)'; Readable = $detailedSmartReadable }
         [pscustomobject]@{ Signal = 'Disk space (volumes)';         Readable = [bool]$data.VolumesReadable }
         [pscustomobject]@{ Signal = 'Windows Update failures';      Readable = [bool]$data.UpdatesReadable }
         [pscustomobject]@{ Signal = 'Problem devices';              Readable = [bool]$data.DevicesReadable }
@@ -2480,7 +2500,7 @@ function Build-AiPrompt($sys, $diag, $map, $redact) {
         [void]$sb.AppendLine('')
     }
     [void]$sb.AppendLine('=== SYSTEM ===')
-    [void]$sb.AppendLine("OS: $(Protect-PromptValue $sys.OS) build $($sys.OSBuild)")
+    [void]$sb.AppendLine("OS: $(Protect-PromptValue $sys.OS) build $(Protect-PromptValue $sys.OSBuild)")
     [void]$sb.AppendLine("Machine: $(Protect-PromptValue $sys.Manufacturer) $(Protect-PromptValue $sys.Model)")
     [void]$sb.AppendLine("CPU: $(Protect-PromptValue $sys.CPU)  |  RAM: $($sys.RAMGB) GB  |  uptime: $($sys.UptimeText)")
     if ($sys.Gpu) { [void]$sb.AppendLine("GPU: $(Protect-PromptValue $sys.Gpu)") }
