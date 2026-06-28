@@ -1016,6 +1016,29 @@ foreach ($rc in $pathChecks) {
     else { Write-Host "VIOLATED  $($rc.N)" -ForegroundColor Red; $afail++ }
 }
 
+# ---- B7 PowerShell Gallery metadata drift-guard: the <#PSScriptInfo#> block (added so the single-file tool can
+#      ship via Publish-PSResource / Publish-Script) must stay present, its .VERSION must NOT drift from the
+#      runtime $ScriptVersion, its .GUID must stay a well-formed (stable) identity, and the project/license URIs
+#      must stay the PUBLIC repo - the same self-asserting discipline as the public README trust-number CI.
+$psiSrc    = [System.IO.File]::ReadAllText($scriptPath)
+$psiMatch  = [regex]::Match($psiSrc, '(?s)<#PSScriptInfo\b.*?#>')
+$psiBlock  = if ($psiMatch.Success) { $psiMatch.Value } else { '' }
+$psiVer    = ([regex]::Match($psiBlock, '\.VERSION\s+(\S+)')).Groups[1].Value
+$psiGuid   = ([regex]::Match($psiBlock, '\.GUID\s+(\S+)')).Groups[1].Value
+$psiAuthor = ([regex]::Match($psiBlock, '\.AUTHOR\s+(\S+)')).Groups[1].Value
+$psiChecks = @(
+    @{ N = 'psgallery: the <#PSScriptInfo#> block is present with the publish-required trio (.VERSION / .GUID / .AUTHOR)'; C = { $psiMatch.Success -and $psiVer -and $psiGuid -and $psiAuthor } }
+    @{ N = 'psgallery (drift-guard): the PSScriptInfo .VERSION matches the runtime $ScriptVersion'; C = { $psiVer -eq $ScriptVersion } }
+    @{ N = 'psgallery: the PSScriptInfo .GUID is a well-formed GUID (stable script identity for the Gallery)'; C = { $psiGuid -match '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$' } }
+    @{ N = 'psgallery: the block carries the PUBLIC PROJECTURI + LICENSEURI (Gallery project/license links, no private path)'; C = { ($psiBlock -match 'PROJECTURI\s+https://github\.com/EvilHumphrey/Second-Opinion') -and ($psiBlock -match 'LICENSEURI\s+https://github\.com/EvilHumphrey/Second-Opinion/blob/main/LICENSE') } }
+)
+foreach ($rc in $psiChecks) {
+    $ok = $false
+    try { $ok = [bool](& $rc.C) } catch { $ok = $false }
+    if ($ok) { Write-Host "OK        $($rc.N)" -ForegroundColor Green; $apass++ }
+    else { Write-Host "VIOLATED  $($rc.N)" -ForegroundColor Red; $afail++ }
+}
+
 Write-Host ''
 if ($Update) {
     Write-Host ("Goldens updated for {0} fixture(s). Guardrails: {1} ok, {2} violated. Review the git diff." -f $fixtures.Count, $apass, $afail) -ForegroundColor Cyan

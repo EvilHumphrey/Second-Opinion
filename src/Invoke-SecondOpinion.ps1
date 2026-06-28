@@ -1,3 +1,36 @@
+<#PSScriptInfo
+
+.VERSION 0.4.0
+
+.GUID 8c4b9e81-e1eb-4cb6-8b13-efd30a9d9481
+
+.AUTHOR EvilHumphrey
+
+.COMPANYNAME
+
+.COPYRIGHT (c) 2026 EvilHumphrey. MIT License.
+
+.TAGS Windows Windows11 Diagnostics Troubleshooting Crash BSOD Bugcheck Reliability ReadOnly PCHealth Triage PSEdition_Desktop PSEdition_Core
+
+.LICENSEURI https://github.com/EvilHumphrey/Second-Opinion/blob/main/LICENSE
+
+.PROJECTURI https://github.com/EvilHumphrey/Second-Opinion
+
+.ICONURI
+
+.EXTERNALMODULEDEPENDENCIES
+
+.REQUIREDSCRIPTS
+
+.EXTERNALSCRIPTDEPENDENCIES
+
+.RELEASENOTES
+See https://github.com/EvilHumphrey/Second-Opinion/releases
+
+.PRIVATEDATA
+
+#>
+
 <#
 .SYNOPSIS
   Second Opinion - a read-only second opinion for a misbehaving Windows 11 PC.
