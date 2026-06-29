@@ -89,13 +89,13 @@ Every tagged [release](https://github.com/EvilHumphrey/Second-Opinion/releases) 
 untampered, save both into the same folder and run this in PowerShell — it prints **OK** or **MISMATCH**:
 
 ```powershell
-$zip  = 'SecondOpinion-v0.4.0.zip'                       # the file you downloaded
+$zip  = 'SecondOpinion-v0.4.1.zip'                       # the file you downloaded
 $want = (Get-FileHash $zip -Algorithm SHA256).Hash       # its actual SHA-256
 if ((Get-Content .\SHA256SUMS.txt) -match "(?i)^$want\s") { "OK: $zip matches SHA256SUMS.txt" }
 else { "MISMATCH - re-download; do not run $zip" }
 ```
 
-Prefer to eyeball it? Run `Get-FileHash .\SecondOpinion-v0.4.0.zip -Algorithm SHA256` and check the printed
+Prefer to eyeball it? Run `Get-FileHash .\SecondOpinion-v0.4.1.zip -Algorithm SHA256` and check the printed
 hash appears in `SHA256SUMS.txt`. A mismatch means a corrupted or interfered-with download — fetch it again.
 
 ## What it touches (and what it never touches)

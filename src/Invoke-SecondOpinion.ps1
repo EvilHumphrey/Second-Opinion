@@ -1,6 +1,6 @@
 <#PSScriptInfo
 
-.VERSION 0.4.0
+.VERSION 0.4.1
 
 .GUID 8c4b9e81-e1eb-4cb6-8b13-efd30a9d9481
 
@@ -61,7 +61,7 @@ param(
 )
 
 $ErrorActionPreference = 'Continue'
-$ScriptVersion = '0.4.0'
+$ScriptVersion = '0.4.1'
 
 # ---------------------------------------------------------------------------
 # Paths + knowledge base
