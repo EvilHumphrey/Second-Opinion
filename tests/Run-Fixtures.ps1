@@ -819,10 +819,14 @@ foreach ($rc in $deepInjChecks) {
 #      baseline diff inherits the path fix (a tainted prior line is re-redacted). Plus NO-CURRENT-LEAK guards so a
 #      future refactor cannot regress: NG1 user-set volume labels never emitted, NG2 the non-display device name
 #      is absent from the PACKET too (P2-1 asserted only Title + prompt), NG3 acceptable hardware detail
-#      (CPU/GPU model, stop code) is NOT over-redacted. Behavior observed identical on PS 5.1 + 7. RESIDUAL
-#      (documented, optional): an arbitrary NAS/UNC SHARE folder OUTSIDE \Users\ (\\NAS\share\Name\) is not masked
-#      - rare (needs WER dumps on a network share + -DeepDump). Golden-neutral (a Protect-Text change + a For-line
-#      that is not in the fingerprint).
+#      (CPU/GPU model, stop code) is NOT over-redacted. Behavior observed identical on PS 5.1 + 7.
+#      B10-ext (2026-06-28): email / UPN identities are now masked to [EMAIL] (a new Protect-Text backstop run
+#      before the map), and the redaction-audit receipt counts the email / profile-path / network-share
+#      categories it previously omitted (G5). RESIDUAL (still deferred, optional): CAN-006 masks the
+#      \\server\share ROOT, but a person-named SUBfolder deeper on a NAS share (\\[NETWORK]\[SHARE]\Name\) is not
+#      masked - rare (needs WER dumps on a network share + -DeepDump) and heuristic (a name folder is hard to
+#      tell from a machine / "dumps" folder), so it waits for a real case. Golden-neutral (the Protect-Text +
+#      audit-text changes are not in the fingerprint).
 $skSys = [pscustomobject]@{
     ComputerName = 'DESKTOP-AVERY'; UserName = 'astone'; OS = 'Windows 11'; OSBuild = '26200'
     Manufacturer = 'ACME'; Model = 'Box'; CPU = 'AMD Ryzen 7 7800X3D 8-Core Processor'; RAMGB = 32; BiosSerial = 'SN-SINK-01'
@@ -847,6 +851,14 @@ $skTaintDiff = [pscustomobject]@{ Usable = $true; Status = 'compared'; Lines = @
 $skTaintDiag = New-Diagnosis (_data @{})
 $skTaintDiag | Add-Member -NotePropertyName BaselineDiff -NotePropertyValue $skTaintDiff -Force
 $skTaintAll = (Build-AiPrompt $skSys $skTaintDiag $skMap $true) + "`n" + ((@((New-HelperPacketArtifacts $skSys $skTaintDiag $skMap $packetStamp).Values)) -join "`n")
+# B10 extension: email / UPN masking (a new Protect-Text backstop) + the G5 redaction-audit counters for the
+# email / profile-path / network-share categories the receipt previously omitted.
+$skEmailOut  = Protect-Text 'ping astone@acme.com and admin@sub.corp.co.uk' $skMap
+$skUpnOut    = Protect-Text 'signed in as jordan.lee@contoso.onmicrosoft.com' $skMap
+$skEmailKeep = Protect-Text 'run game.exe v1.2.3 stop 0x116; @echo off; user@ here; a.b.c' $skMap
+$skAuditRaw  = "mail a@b.com; C:\Users\Avery Stone\f.dmp; \\NAS\backup\d.dmp; C:\Users\astone\g.txt; mac 00:1A:2B:3C:4D:5E"
+$skAuditCounts = Get-RedactionAuditCounts @($skAuditRaw) $skMap
+$skAuditText   = Build-RedactionAuditText $skAuditCounts $packetStamp
 $sinkChecks = @(
     @{ N = 'sink-audit (G1/G3): Protect-Text masks the \Users\ profile-folder segment across drive/root/file-URI/JSON/lowercase forms'; C = { (-not (@($skPathLeakOut) | Where-Object { $_ -match 'Avery|Stone|bob' })) -and (-not (@($skPathLeakOut) | Where-Object { $_ -notmatch '\[USER\]' })) } }
     @{ N = 'sink-audit (G1/G3): non-\Users\ system paths, Program Files, and prose are NOT over-redacted'; C = { (@($skPathKeepOut) -join '|') -eq (@($skPathKeep) -join '|') } }
@@ -857,6 +869,12 @@ $sinkChecks = @(
     @{ N = 'sink-audit (NG1): a user-set volume label never reaches a shareable artifact (the low-disk drive is still reported)'; C = { ($skVolAll -notmatch 'Avery|Backup') -and ($skVolAll -match 'E:') } }
     @{ N = 'sink-audit (NG2): a non-display problem-device FriendlyName is absent from the helper packet + evidence JSON (not just the prompt)'; C = { ($skNonDispPacket -notmatch 'Jordan') -and ($skNonDispPacket -match 'Problem device|Bluetooth|Code') } }
     @{ N = 'sink-audit (NG3): acceptable hardware detail (CPU/GPU model, stop code) is preserved, not over-redacted'; C = { ($skHwPrompt -match 'AMD Ryzen 7 7800X3D') -and ($skHwPrompt -match 'RTX 4070 Ti SUPER') -and ($skHwPrompt -match '0x116') } }
+    @{ N = 'sink-audit (B10 email): an e-mail / UPN address is masked to [EMAIL] in share-safe text (identity gone)'; C = { ($skEmailOut -match '\[EMAIL\]') -and ($skEmailOut -notmatch 'astone|acme|admin|corp') } }
+    @{ N = 'sink-audit (B10 email): a Microsoft-account UPN (user@tenant.onmicrosoft.com) is masked'; C = { ($skUpnOut -match '\[EMAIL\]') -and ($skUpnOut -notmatch 'jordan|contoso') } }
+    @{ N = 'sink-audit (B10 email): NO over-redaction - an exe name, a version, a stop code, and a bare @ are left intact'; C = { ($skEmailKeep -notmatch '\[EMAIL\]') -and ($skEmailKeep -match 'game\.exe') -and ($skEmailKeep -match 'v1\.2\.3') -and ($skEmailKeep -match '0x116') } }
+    @{ N = 'redaction-audit (G5): the receipt now counts the email / profile-path / network-share categories'; C = { ($skAuditCounts.Emails -ge 1) -and ($skAuditCounts.ProfilePaths -ge 1) -and ($skAuditCounts.Networks -ge 1) } }
+    @{ N = 'redaction-audit (G5): no double-count - a \Users\<SAM> folder is a username; only the SAM!=folder path is a ProfilePath'; C = { ($skAuditCounts.ProfilePaths -eq 1) -and ($skAuditCounts.Usernames -ge 1) } }
+    @{ N = 'redaction-audit (G5): Build-RedactionAuditText prints the new category lines'; C = { ($skAuditText -match 'Email addresses masked:') -and ($skAuditText -match 'Profile paths masked:') -and ($skAuditText -match 'Network shares masked:') } }
 )
 foreach ($rc in $sinkChecks) {
     $ok = $false

@@ -2558,6 +2558,15 @@ function Get-Ipv4RedactionPattern {
     '\b(25[0-5]|2[0-4]\d|[01]?\d\d?)(\.(25[0-5]|2[0-4]\d|[01]?\d\d?)){3}\b'
 }
 
+function Get-EmailRedactionPattern {
+    # Mask an e-mail / UPN identity (user@domain.<TLD>) - direct PII that can ride in event messages, a
+    # Microsoft-account sign-in event, WER metadata, or free-text intake notes, and is NOT in the identity map.
+    # Strict shape: a real >=2-letter TLD, so it can never match an executable name, version, stop code, or
+    # path (none carry '@<dotted-domain>') - no over-redaction of diagnostic detail. Case-insensitive; the
+    # boundaries stop it starting mid-token or leaving a trailing domain fragment.
+    '(?i)(?<![A-Za-z0-9._%+\-])[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}(?![A-Za-z0-9.\-])'
+}
+
 function Get-UserPathRedactionPattern {
     # Mask ONLY the profile-folder segment right after \Users\ so a Windows profile path leaks neither the
     # account name NOR a human full name when they DIFFER from the SAM UserName the map masks (sink-level audit
@@ -2577,6 +2586,10 @@ function Get-UserPathRedactionPattern {
 function Protect-Text($text, $map) {
     if (-not $text) { return $text }
     $t = [string]$text
+    # Email / UPN (user@domain.tld) is direct PII outside the identity map. Mask the whole address atomically
+    # BEFORE the map so a name in the local part is never left half-masked; the strict shape never touches an
+    # executable name, version, or path. The local unredacted report (no map) keeps it for the helper.
+    $t = [regex]::Replace($t, (Get-EmailRedactionPattern), '[EMAIL]')
     foreach ($k in $map.Keys) { $t = $t -replace $k, $map[$k] }
     # Profile-path folder AFTER the map: when the SAM UserName equals the folder, the map already masked it to
     # [USER_1] (the segment skips '[' so it stays as-is); when they DIFFER (SAM 'astone' vs folder 'Avery Stone'),
@@ -3284,35 +3297,63 @@ function Get-RegexMatchCount($text, $pattern) {
 }
 
 function Get-RedactionAuditCounts($rawTexts, $map) {
-    $all = (@($rawTexts) -join "`n")
+    # Count + strip in the SAME order Protect-Text masks, so every identifier is attributed to exactly ONE
+    # category (e.g. a \Users\<SAM> folder counts as a username, not also as a profile path). The audit never
+    # prints values - this is an honest receipt of how many of each category were masked. (G5 adds the
+    # email / profile-path / network-share categories the earlier receipt omitted.)
+    $work = (@($rawTexts) -join "`n")
     $counts = [ordered]@{
-        Hostnames = 0
-        Usernames = 0
-        Serials   = 0
-        Macs      = 0
-        IPv4      = 0
-        IPv6      = 0
+        Hostnames    = 0
+        Usernames    = 0
+        Serials      = 0
+        Emails       = 0
+        ProfilePaths = 0
+        Networks     = 0
+        Macs         = 0
+        IPv4         = 0
+        IPv6         = 0
     }
+    # 1. Email / UPN (Protect-Text masks these first, before the map). Strip so the map cannot re-count a name
+    #    embedded in the local part.
+    $emailPattern = Get-EmailRedactionPattern
+    $counts.Emails = Get-RegexMatchCount $work $emailPattern
+    $work = [regex]::Replace($work, $emailPattern, ' ')
+    # 2a. Identifiers redacted AT SOURCE (evidence-JSON CaseIdentifiers + helper-summary identity) already appear
+    #     as placeholders, so the raw map-key match counts 0 for them - count the placeholders NOW, before the map
+    #     loop below creates more, so they are not double-counted. (Codex deep-scan + CAN-003.)
+    $counts.Hostnames += Get-RegexMatchCount $work '\[HOST_\d+\]'
+    $counts.Usernames += Get-RegexMatchCount $work '\[USER_\d+\]'
+    $counts.Serials   += Get-RegexMatchCount $work '\[SERIAL_\d+\]'
+    # 2b. The identity map (host / user / serial; app/module are masked but not itemised). Replace each raw match
+    #     with its REAL placeholder so a \Users\<SAM> path collapses to \Users\[USER_1] and the path rule below
+    #     correctly skips it (no path/username double-count).
     foreach ($k in @($map.Keys)) {
         $v = [string]$map[$k]
-        if ($v.StartsWith('[HOST_')) { $counts.Hostnames += Get-RegexMatchCount $all $k }
-        elseif ($v.StartsWith('[USER_')) { $counts.Usernames += Get-RegexMatchCount $all $k }
-        elseif ($v.StartsWith('[SERIAL_')) { $counts.Serials += Get-RegexMatchCount $all $k }
+        $c = Get-RegexMatchCount $work $k
+        if ($c -gt 0) {
+            if ($v.StartsWith('[HOST_')) { $counts.Hostnames += $c }
+            elseif ($v.StartsWith('[USER_')) { $counts.Usernames += $c }
+            elseif ($v.StartsWith('[SERIAL_')) { $counts.Serials += $c }
+            $work = $work -replace $k, $v
+        }
     }
-    # Identifiers redacted AT SOURCE (evidence-JSON CaseIdentifiers + helper-summary identity) already appear as
-    # placeholders in these texts, so the raw map-key match above counts 0 for them - add the placeholder
-    # occurrences so the audit receipt still honestly reports them. (Codex deep-scan + CAN-003: source-redaction
-    # otherwise made the raw-match-only count read 0.)
-    $counts.Hostnames += Get-RegexMatchCount $all '\[HOST_\d+\]'
-    $counts.Usernames += Get-RegexMatchCount $all '\[USER_\d+\]'
-    $counts.Serials   += Get-RegexMatchCount $all '\[SERIAL_\d+\]'
+    # 3. Profile-path folders the map did NOT cover (SAM UserName != profile/full name - the G1/G3 leak class).
+    #    The pattern skips an already-mapped [USER_1] segment, so this counts only the genuinely-new path masks.
+    $pathPattern = Get-UserPathRedactionPattern
+    $counts.ProfilePaths = Get-RegexMatchCount $work $pathPattern
+    $work = [regex]::Replace($work, $pathPattern, ' ')
+    # 4. UNC server\share roots (CAN-006).
+    $uncPattern = '(?i)(?<![A-Za-z0-9:])\\\\[^\\/\r\n]+\\[^\\/\r\n]+'
+    $counts.Networks = Get-RegexMatchCount $work $uncPattern
+    $work = [regex]::Replace($work, $uncPattern, ' ')
+    # 5-7. MAC, then IPv6, then IPv4 (each on the text the prior stage stripped).
     $macPattern = '\b([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}\b'
-    $counts.Macs = Get-RegexMatchCount $all $macPattern
-    $withoutMac = [regex]::Replace($all, $macPattern, ' ')
+    $counts.Macs = Get-RegexMatchCount $work $macPattern
+    $work = [regex]::Replace($work, $macPattern, ' ')
     $ipv6Pattern = Get-Ipv6RedactionPattern
-    $counts.IPv6 = Get-RegexMatchCount $withoutMac $ipv6Pattern
-    $withoutIpv6 = [regex]::Replace($withoutMac, $ipv6Pattern, ' ')
-    $counts.IPv4 = Get-RegexMatchCount $withoutIpv6 (Get-Ipv4RedactionPattern)
+    $counts.IPv6 = Get-RegexMatchCount $work $ipv6Pattern
+    $work = [regex]::Replace($work, $ipv6Pattern, ' ')
+    $counts.IPv4 = Get-RegexMatchCount $work (Get-Ipv4RedactionPattern)
     return [pscustomobject]$counts
 }
 
@@ -3326,6 +3367,9 @@ function Build-RedactionAuditText($counts, $stamp) {
     [void]$sb.AppendLine("Hostnames masked: $($counts.Hostnames)")
     [void]$sb.AppendLine("Usernames masked: $($counts.Usernames)")
     [void]$sb.AppendLine("Serials masked: $($counts.Serials)")
+    [void]$sb.AppendLine("Email addresses masked: $($counts.Emails)")
+    [void]$sb.AppendLine("Profile paths masked: $($counts.ProfilePaths)")
+    [void]$sb.AppendLine("Network shares masked: $($counts.Networks)")
     [void]$sb.AppendLine("MAC addresses masked: $($counts.Macs)")
     [void]$sb.AppendLine("IPv4 addresses masked: $($counts.IPv4)")
     [void]$sb.AppendLine("IPv6 addresses masked: $($counts.IPv6)")
