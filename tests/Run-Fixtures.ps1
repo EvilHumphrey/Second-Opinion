@@ -458,7 +458,7 @@ try {
         else { Write-Host "VIOLATED  $($dc.N)" -ForegroundColor Red; $afail++ }
     }
 } finally {
-    foreach ($t in $script:DdTempFiles) { try { Remove-Item -LiteralPath $t -Force -ErrorAction SilentlyContinue } catch { } }
+    foreach ($t in $script:DdTempFiles) { try { Remove-Item -LiteralPath $t -Force -ErrorAction SilentlyContinue } catch { $null = $_ } }
 }
 
 # ---- Render/prompt-layer probes: the fingerprint cannot see Format-IntakeLines or the block

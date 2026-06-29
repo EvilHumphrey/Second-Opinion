@@ -20,7 +20,7 @@ $block = "# KB-EMBED-START$nl`$EmbeddedBugchecksJson = @'$nl$jsonNl$nl'@$nl# KB-
 
 $pattern = "(?s)# KB-EMBED-START.*?# KB-EMBED-END"
 if ($srcText -notmatch $pattern) { Write-Error 'KB-EMBED-START / KB-EMBED-END markers not found in src.'; exit 1 }
-$new = [regex]::Replace($srcText, $pattern, { param($m) $block })
+$new = [regex]::Replace($srcText, $pattern, { $block })   # constant replacement; the Match arg is unused by design
 [System.IO.File]::WriteAllText($src, $new)
 
 $count = @(($json | ConvertFrom-Json).PSObject.Properties | Where-Object { $_.Name -ne '_comment' }).Count

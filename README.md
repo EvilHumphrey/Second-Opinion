@@ -3,6 +3,7 @@
 **Read-only Windows crash triage for BSODs, random restarts, WHEA errors, GPU TDRs, and drive/device clues.**
 
 ![tests](https://github.com/EvilHumphrey/Second-Opinion/actions/workflows/tests.yml/badge.svg)
+![lint](https://github.com/EvilHumphrey/Second-Opinion/actions/workflows/lint.yml/badge.svg)
 
 One read-only pass over the signals that actually matter — crash/bugcheck history, unexpected-restart and
 hardware-error events, drive health, app crashes, problem devices — fused into a **confidence-tiered list of
@@ -189,6 +190,10 @@ AI-prompt instructions*). Run them yourself:
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\Run-Fixtures.ps1
 ```
+
+The scripts are also linted on every push with PSScriptAnalyzer ([`.github/workflows/lint.yml`](.github/workflows/lint.yml)).
+Its settings statically enforce the Windows PowerShell 5.1 syntax compatibility the tool depends on, so a
+PowerShell-7-only construct can't slip into a tool that has to run on 5.1.
 
 Architecture and the abstention/guardrail rationale live in [`docs/DESIGN.md`](docs/DESIGN.md);
 contributors, see [`CONTRIBUTING.md`](CONTRIBUTING.md).

@@ -621,10 +621,10 @@ function Test-Elevated {
     } $false
 }
 
-function Get-EventXmlData($event) {
+function Get-EventXmlData($evt) {
     $result = @{ Named = @{}; Values = @() }
     Invoke-Safe {
-        $xml = [xml]$event.ToXml()
+        $xml = [xml]$evt.ToXml()
         foreach ($d in $xml.Event.EventData.Data) {
             if ($d -is [string]) {
                 $result.Values += $d
@@ -679,11 +679,11 @@ function Find-DumpPathInText($value) {
     return $null
 }
 
-function Parse-BugCheckEvent($event) {
+function Parse-BugCheckEvent($evt) {
     $codeStr = $null
     $dump = $null
 
-    $xd = Get-EventXmlData $event
+    $xd = Get-EventXmlData $evt
     $codeKeys = @('BugcheckCode', 'BugCheckCode', 'param1', 'P1')
     foreach ($k in $codeKeys) {
         if (-not $codeStr -and $xd.Named.ContainsKey($k)) {
@@ -708,13 +708,13 @@ function Parse-BugCheckEvent($event) {
         }
     }
 
-    if ($event.Message) {
+    if ($evt.Message) {
         if (-not $codeStr) {
-            $m = [regex]::Match($event.Message, '0x[0-9A-Fa-f]{8}')
+            $m = [regex]::Match($evt.Message, '0x[0-9A-Fa-f]{8}')
             if ($m.Success) { $codeStr = Format-Bugcheck ([Convert]::ToInt64($m.Value, 16)) }
         }
         if (-not $dump) {
-            $dm = [regex]::Match($event.Message, 'saved in:\s*(.+?\.dmp)')
+            $dm = [regex]::Match($evt.Message, 'saved in:\s*(.+?\.dmp)')
             if ($dm.Success) { $dump = $dm.Groups[1].Value.Trim() }
         }
     }
@@ -928,7 +928,7 @@ function Invoke-DumpDebugger($dumpPath, $debuggerPath) {
         $outTask = $p.StandardOutput.ReadToEndAsync()
         $errTask = $p.StandardError.ReadToEndAsync()
         if (-not $p.WaitForExit(30000)) {
-            try { $p.Kill() } catch { }
+            try { $p.Kill() } catch { $null = $_ }   # best-effort kill; ignore if it already exited
             return [pscustomobject]@{ Success = $false; Text = ''; Error = 'debugger timed out'; ExitCode = $null }
         }
         $out = $outTask.Result
@@ -938,7 +938,7 @@ function Invoke-DumpDebugger($dumpPath, $debuggerPath) {
     } catch {
         return [pscustomobject]@{ Success = $false; Text = ''; Error = $_.Exception.Message; ExitCode = $null }
     } finally {
-        try { $p.Dispose() } catch { }
+        try { $p.Dispose() } catch { $null = $_ }   # best-effort cleanup
     }
 }
 

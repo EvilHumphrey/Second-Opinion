@@ -1,0 +1,51 @@
+name: lint
+
+# Static analysis of the shipped PowerShell with PSScriptAnalyzer, tuned by PSScriptAnalyzerSettings.psd1
+# (which also enforces Windows PowerShell 5.1 syntax compatibility - a core invariant). Read-only: the
+# analyzer parses the scripts, it never runs them.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  pssa:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install PSScriptAnalyzer
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # -Force -SkipPublisherCheck installs/updates cleanly even though the runner image ships a
+          # copy already (avoids a publisher-certificate mismatch halting the install).
+          Install-Module PSScriptAnalyzer -Scope CurrentUser -Force -SkipPublisherCheck
+          Import-Module PSScriptAnalyzer
+          Write-Host "PSScriptAnalyzer $((Get-Module PSScriptAnalyzer).Version)"
+
+      - name: PSScriptAnalyzer (lint gate)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $settings = Join-Path $PWD 'PSScriptAnalyzerSettings.psd1'
+
+          # Lint exactly the committed PowerShell that ships: the tool (src) and the gate (tests).
+          # Scoped to those dirs so a local checkout (which may hold throwaway .claude worktrees) and
+          # the CI checkout analyze the same set. -Path takes one path at a time, so loop.
+          $findings = @()
+          foreach ($dir in 'src', 'tests') {
+            $findings += Invoke-ScriptAnalyzer -Path $dir -Recurse -Settings $settings
+          }
+
+          if ($findings) {
+            # Emit each as a GitHub annotation (clickable on the file/line) AND a readable line, then
+            # fail loud - never let a finding slip through as a green build.
+            $findings | Sort-Object ScriptName, Line | ForEach-Object {
+              Write-Host ("::error file={0},line={1}::[{2}] {3}" -f $_.ScriptName, $_.Line, $_.RuleName, $_.Message)
+              Write-Host ("{0}:{1}  [{2}] {3}" -f (Split-Path $_.ScriptName -Leaf), $_.Line, $_.RuleName, $_.Message)
+            }
+            Write-Host ("::error::PSScriptAnalyzer found {0} finding(s). Fix them, or - if a rule genuinely fights this project's design - exclude it in PSScriptAnalyzerSettings.psd1 with a comment explaining why." -f $findings.Count)
+            exit 1
+          }
+          Write-Host "OK: PSScriptAnalyzer clean (0 findings) across src + tests."
