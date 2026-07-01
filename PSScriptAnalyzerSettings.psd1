@@ -3,7 +3,8 @@
 #
 # Philosophy: run the full default rule set (security + correctness best practices a trust-critical,
 # read-only tool wants), MINUS the handful of rules that fight this project's deliberate design, PLUS
-# an explicit Windows PowerShell 5.1 syntax-compatibility check that machine-enforces a core invariant.
+# explicit Windows PowerShell 5.1 compatibility checks (syntax + commands/parameters + .NET types)
+# that machine-enforce a core invariant.
 #
 # Run it the way CI does:
 #   Invoke-ScriptAnalyzer -Path src,tests -Recurse -Settings .\PSScriptAnalyzerSettings.psd1
@@ -47,6 +48,32 @@
         PSUseCompatibleSyntax = @{
             Enable         = $true
             TargetVersions = @('5.1', '7.0')
+        }
+
+        # The same invariant one level deeper: every COMMAND and PARAMETER used must exist on BOTH
+        # Windows PowerShell 5.1 and PowerShell 7. Catches what the syntax rule cannot see - usage
+        # that parses fine on 5.1 but fails at runtime (e.g. `ConvertFrom-Json -AsHashtable` is a
+        # 7-only parameter) and cmdlets removed from 7 (e.g. Get-WmiObject). Profiles = the newest
+        # Windows-CLIENT profiles PSScriptAnalyzer ships (Win10 1809 / 5.1 and Win10 1903 / 7.0).
+        # The tool targets Windows 11, so a command valid only on a build NEWER than the profile
+        # would false-positive - accepted tradeoff: the gate fails loud and a genuine case can be
+        # suppressed with a comment here.
+        PSUseCompatibleCommands = @{
+            Enable         = $true
+            TargetProfiles = @(
+                'win-48_x64_10.0.17763.0_5.1.17763.316_x64_4.0.30319.42000_framework'
+                'win-4_x64_10.0.18362.0_7.0.0_x64_3.1.2_core'
+            )
+        }
+
+        # And the same for .NET TYPES and their members (e.g. the core-only
+        # System.Management.Automation.SemanticVersion would flag against the 5.1 profile).
+        PSUseCompatibleTypes = @{
+            Enable         = $true
+            TargetProfiles = @(
+                'win-48_x64_10.0.17763.0_5.1.17763.316_x64_4.0.30319.42000_framework'
+                'win-4_x64_10.0.18362.0_7.0.0_x64_3.1.2_core'
+            )
         }
     }
 }

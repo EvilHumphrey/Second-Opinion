@@ -192,8 +192,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\Run-Fixtures.ps1
 ```
 
 The scripts are also linted on every push with PSScriptAnalyzer ([`.github/workflows/lint.yml`](.github/workflows/lint.yml)).
-Its settings statically enforce the Windows PowerShell 5.1 syntax compatibility the tool depends on, so a
-PowerShell-7-only construct can't slip into a tool that has to run on 5.1.
+Its settings statically enforce the Windows PowerShell 5.1 compatibility the tool depends on - syntax,
+commands and their parameters, and .NET types - so a PowerShell-7-only construct can't slip into a tool
+that has to run on 5.1.
 
 Architecture and the abstention/guardrail rationale live in [`docs/DESIGN.md`](docs/DESIGN.md);
 contributors, see [`CONTRIBUTING.md`](CONTRIBUTING.md).
