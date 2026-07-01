@@ -16,7 +16,7 @@ jobs:
   package:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       # Build the named ZIP + checksum on Windows so the bundled .cmd / .ps1 keep their native
       # line endings, using only built-in PowerShell (Compress-Archive, Get-FileHash).

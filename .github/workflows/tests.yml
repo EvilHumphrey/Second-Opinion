@@ -9,7 +9,7 @@ jobs:
   fixtures:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Fixture harness (PowerShell 7)
         shell: pwsh
