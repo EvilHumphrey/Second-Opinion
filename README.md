@@ -90,13 +90,13 @@ Every tagged [release](https://github.com/EvilHumphrey/Second-Opinion/releases) 
 untampered, save both into the same folder and run this in PowerShell — it prints **OK** or **MISMATCH**:
 
 ```powershell
-$zip  = 'SecondOpinion-v0.4.1.zip'                       # the file you downloaded
+$zip  = 'SecondOpinion-v0.5.0.zip'                       # the file you downloaded
 $want = (Get-FileHash $zip -Algorithm SHA256).Hash       # its actual SHA-256
 if ((Get-Content .\SHA256SUMS.txt) -match "(?i)^$want\s") { "OK: $zip matches SHA256SUMS.txt" }
 else { "MISMATCH - re-download; do not run $zip" }
 ```
 
-Prefer to eyeball it? Run `Get-FileHash .\SecondOpinion-v0.4.1.zip -Algorithm SHA256` and check the printed
+Prefer to eyeball it? Run `Get-FileHash .\SecondOpinion-v0.5.0.zip -Algorithm SHA256` and check the printed
 hash appears in `SHA256SUMS.txt`. A mismatch means a corrupted or interfered-with download — fetch it again.
 
 ## What it touches (and what it never touches)
@@ -181,7 +181,7 @@ a public issue).
 
 ## Trust the ranking (run the tests)
 
-The scorer is deterministic and guarded by a fixture harness — 51 snapshot fixtures plus 308 guardrail
+The scorer is deterministic and guarded by a fixture harness — 51 snapshot fixtures plus 310 guardrail
 assertions that must always hold (e.g. *a single GPU bugcheck is never tier-1*, *blank SMART is never
 "healthy"*, *dump-less restarts never reach High*, *real-but-sub-threshold signals never read as "clean"*,
 *a corroborator like a SMART warning is never a lone verdict*, *a hostile device name can't inject HTML or

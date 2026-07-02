@@ -234,7 +234,14 @@ $playbookGlobalChecks = @(
             }
             -not $bad
         } }
-    @{ N = 'playbook global: drive playbook starts with the backup step'; C = { $first = @(Get-CulpritPlaybook 'drive') | Select-Object -First 1; [bool]$first -and ([string](Get-PlaybookStepValue $first 'Do')) -match '^Back up important data now' } }
+    @{ N = 'playbook global: drive AND storage-subsystem playbooks start with the backup step'; C = {
+            $ok = $true
+            foreach ($k in @('drive', 'storage-subsystem')) {
+                $first = @(Get-CulpritPlaybook $k) | Select-Object -First 1
+                if (-not $first -or ([string](Get-PlaybookStepValue $first 'Do')) -notmatch '^Back up important data') { $ok = $false }
+            }
+            $ok
+        } }
     @{ N = 'playbook global: power playbook starts with crash capture'; C = { $first = @(Get-CulpritPlaybook 'power') | Select-Object -First 1; [bool]$first -and ([string](Get-PlaybookStepValue $first 'Do')) -match '^Turn on crash capture' } }
     @{ N = 'playbook global: handoff CMOS step carries boot-risk and no costs-money step'; C = {
             $hasBootRisk = $false
@@ -540,6 +547,7 @@ $promptIntake  = Build-AiPrompt $probeSys $diags['gpu-failure-01-intake'] (New-R
 $htmlIntake    = Render-Html   $probeSys $diags['gpu-failure-01-intake']
 $promptEmpty   = Build-AiPrompt $probeSys $diags['empty'] (New-RedactionMap $probeSys) $true
 $promptCapture = Build-AiPrompt $probeSys $diags['capture-dumps'] (New-RedactionMap $probeSys) $true
+$htmlCapture   = Render-Html   $probeSys $diags['capture-dumps']
 $promptNoRuled = Build-AiPrompt $probeSys $diags['collection-failed'] (New-RedactionMap $probeSys) $true  # RuledOut is empty
 $promptGpuFailure01   = Build-AiPrompt $probeSys $diags['gpu-failure-01'] (New-RedactionMap $probeSys) $true
 $htmlGpuFailure01     = Render-Html   $probeSys $diags['gpu-failure-01']
@@ -592,14 +600,14 @@ $renderChecks = @(
     @{ N = 'render: drive playbook reaches report.html and AI prompt with backup first'; C = { ($htmlDrive -match '<li>Back up important data now') -and ($promptDrive -match '(?m)^\s+1\. Back up important data now') -and ($promptDrive -match '\[needs admin\]') } }
     @{ N = 'render: memory playbook reaches report.html and AI prompt with stock-speed retest first'; C = { ($htmlMemory -match '<li>If XMP/EXPO/DOCP is active') -and ($promptMemory -match '(?m)^\s+1\. If XMP/EXPO/DOCP is active') -and ($promptMemory -match '\[needs reboot\]') } }
     @{ N = 'render: CPU playbook reaches report.html and AI prompt'; C = { ($htmlCpu -match '<li>Remove any CPU/RAM overclock') -and ($promptCpu -match '(?m)^\s+1\. Remove any CPU/RAM overclock') -and ($promptCpu -match '\[needs reboot\]') } }
-    @{ N = 'render: storage-subsystem playbook reaches report.html and AI prompt'; C = { ($htmlStorage -match '<li>Reseat or replace the drive data') -and ($promptStorage -match '(?m)^\s+1\. Reseat or replace the drive data') -and ($promptStorage -match '\[needs admin\]') } }
+    @{ N = 'render: storage-subsystem playbook reaches report.html and AI prompt with backup first'; C = { ($htmlStorage -match '<li>Back up important data from the affected drive') -and ($promptStorage -match '(?m)^\s+1\. Back up important data from the affected drive') -and ($promptStorage -match '(?m)^\s+2\. Reseat or replace the drive data') -and ($promptStorage -match '\[needs admin\]') } }
     @{ N = 'render: recent-driver playbook reaches report.html and AI prompt'; C = { ($htmlDriver -match '<li>Recall what changed most recently') -and ($promptDriver -match '(?m)^\s+1\. Recall what changed most recently') -and ($promptDriver -match 'capture the next crash dump') } }
     @{ N = 'render: power playbook reaches report.html and AI prompt with capture first'; C = { ($htmlKp41 -match '<li>Turn on crash capture') -and ($promptKp41 -match '(?m)^\s+1\. Turn on crash capture') -and ($promptKp41 -match '\[reversible\]') } }
     @{ N = 'render: system low-disk playbook reaches report.html and AI prompt'; C = { ($htmlLowSys -match '<li>Free space now') -and ($promptLowSys -match '(?m)^\s+1\. Free space now') -and ($promptLowSys -match 'more than 10 percent free') } }
     @{ N = 'render: problem-device playbook reaches report.html and AI prompt'; C = { ($htmlDevice -match '<li>Update or reinstall the flagged device driver') -and ($promptDevice -match '(?m)^\s+1\. Update or reinstall the flagged device driver') -and ($promptDevice -match '\[costs money\]') } }
     @{ N = 'render: app playbook reaches report.html and AI prompt'; C = { ($htmlApp -match '<li>Update or reinstall the crashing app') -and ($promptApp -match '(?m)^\s+1\. Update or reinstall the crashing app') -and ($promptApp -match 'capture/overlay software') } }
     @{ N = 'render: handoff playbook reaches report.html and AI prompt with boot-risk tag'; C = { ($htmlHandoff -match '<li>BIOS Load Optimized Defaults') -and ($promptHandoff -match '(?m)^\s+4\. If it ever fails to POST') -and ($promptHandoff -match '\[boot risk\]') } }
-    @{ N = 'render: capture playbook reaches report.html and AI prompt'; C = { ($promptCapture -match 'Capture the next crash') -and ($promptCapture -match '(?m)^\s+1\. Win\+R -> "SystemPropertiesAdvanced"') -and ($promptCapture -match '\[reversible\]') } }
+    @{ N = 'render: capture playbook reaches report.html and AI prompt'; C = { ($promptCapture -match 'Capture the next crash') -and ($promptCapture -match '(?m)^\s+1\. Win\+R -> "SystemPropertiesAdvanced"') -and ($promptCapture -match '\[reversible\]') -and ($htmlCapture -match 'confirm playbook:') -and ($htmlCapture -match '<li>Win\+R -&gt; &quot;SystemPropertiesAdvanced&quot;') } }
     @{ N = 'render: non-system low-disk node stays flat (no playbook block)'; C = { ($promptLowData -notmatch 'playbook:') -and ($htmlLowData -notmatch 'confirm playbook:') } }
     @{ N = 'render: the XMP-off performance tip reaches the AI prompt'; C = { $promptXmp -match 'Performance tip' } }
     @{ N = 'render: the report carries a "What was checked this run" readability matrix'; C = { $htmlIntake -match 'What was checked this run' } }
@@ -869,6 +877,24 @@ $wheaUnreadableCur = New-Diagnosis (_data @{ Whea = (_whea 0 0 0 $false) })
 $wheaUnreadableCur | Add-Member -NotePropertyName EvidenceSnapshot -NotePropertyValue (New-SoEvidenceObject $probeSys $wheaUnreadableCur $packetStamp) -Force
 $wheaAbstainText = ((Get-SoBaselineDiffLines (Compare-SoEvidence $wheaReadableBaseEv $wheaUnreadableCur)) -join "`n")
 
+# Audit 2026-07-01: a pwsh-written packet is BOM-LESS UTF-8; Windows PowerShell 5.1 decodes a BOM-less
+# file as ANSI unless told otherwise, so a non-ASCII char in a compared field would mojibake and fake a
+# "top hypothesis changed" diff. Probe: write a BOM-less UTF-8 baseline whose title carries e-acute
+# (built from a char code - the SOURCE stays ASCII) and assert it round-trips through
+# Read-SoBaselineEvidence on THIS shell.
+$eAcute = [string][char]0x00E9
+$bomlessPath = Join-Path $env:TEMP ("second-opinion-bomless-baseline-{0}.json" -f ([guid]::NewGuid().ToString('N')))
+$bomlessJson = '{"SchemaVersion":"1.1","Culprits":[{"Title":"GPU driver (' + $eAcute + 'chantillon)","TierClass":"gpu","Tier":1,"Confidence":"High"}]}'
+[System.IO.File]::WriteAllText($bomlessPath, $bomlessJson, (New-Object System.Text.UTF8Encoding($false)))
+$bomlessLoad = Read-SoBaselineEvidence $bomlessPath
+try { Remove-Item -LiteralPath $bomlessPath -Force -ErrorAction Stop } catch { $null = $_ }
+# Audit 2026-07-01: a baseline storing SchemaVersion as a JSON NUMBER stringifies to '1.0' on 5.1
+# ([decimal]) but '1' on 7 ([double]) - the schema gate must accept both shells' spellings of 1.x
+# and still reject a numeric 2.0.
+$numericSchema10 = (ConvertFrom-Json '{"SchemaVersion":1.0}').SchemaVersion
+$numericSchema11 = (ConvertFrom-Json '{"SchemaVersion":1.1}').SchemaVersion
+$numericSchema20 = (ConvertFrom-Json '{"SchemaVersion":2.0}').SchemaVersion
+
 $manualRedactedDiff = [pscustomobject]@{
     Usable = $true
     Status = 'compared'
@@ -892,6 +918,8 @@ $diffChecks = @(
     @{ N = 'baseline-diff: AI prompt redacts identifiers inside baseline diff notes'; C = { ($diffPrompt -notmatch 'DESKTOP-RED01|redacted_user|SN-REDACT-77|00:1A:2B:3C:4D:5E|192\.168\.1\.42|fe80::abcd') -and ($diffPrompt -match '\[HOST_1\]') -and ($diffPrompt -match '\[MAC\]') -and ($diffPrompt -match '\[IP\]') -and ($diffPrompt -match '\[IPV6\]') } }
     @{ N = 'baseline-diff: packet baseline-diff.md redacts identifiers'; C = { ($diffPacket['baseline-diff.md'] -notmatch 'DESKTOP-RED01|redacted_user|SN-REDACT-77|00:1A:2B:3C:4D:5E|192\.168\.1\.42|fe80::abcd') -and ($diffPacket['baseline-diff.md'] -match '\[HOST_1\]') -and ($diffPacket['baseline-diff.md'] -match '\[MAC\]') -and ($diffPacket['baseline-diff.md'] -match '\[IP\]') -and ($diffPacket['baseline-diff.md'] -match '\[IPV6\]') } }
     @{ N = 'baseline-diff: an unreadable current signal ABSTAINS - no false "WHEA dropped from 8 to 0" (honest-abstention)'; C = { ($wheaAbstainText -notmatch 'WHEA total event count (decreased|increased)') -and ($wheaAbstainText -notmatch 'hardware-error log activity dropped') -and ($wheaAbstainText -match 'not readable in one run') } }
+    @{ N = 'baseline-diff: a BOM-less UTF-8 baseline (pwsh-written packet) round-trips non-ASCII on this shell'; C = { $bomlessLoad.Usable -and (([string]$bomlessLoad.Evidence.Culprits[0].Title).Contains([string][char]0x00E9)) } }
+    @{ N = 'baseline-diff: numeric SchemaVersion 1.0/1.1 accepted, numeric 2.0 rejected, on this shell'; C = { (Test-SoEvidenceSchemaVersion $numericSchema10) -and (Test-SoEvidenceSchemaVersion $numericSchema11) -and (-not (Test-SoEvidenceSchemaVersion $numericSchema20)) } }
 )
 foreach ($dc in $diffChecks) {
     $ok = $false

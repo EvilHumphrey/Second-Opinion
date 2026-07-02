@@ -1,9 +1,10 @@
 counts crashes=1 distinct=1 unexplained=0 appcrash=0
 culprit | Storage subsystem (drive / cable / controller) | storage | 2 | Medium
-playbook | storage | 1 | do=Reseat or replace the drive data and power cabling for SATA, or reseat the NVMe module. | proves=Errors stopping after reseat/cable work points at connection/cable; errors continuing keeps the drive/controller path in suspicion. | risk=reversible
-playbook | storage | 2 | do=Run a full SMART read and chkdsk from an elevated shell. | proves=SMART errors or file-system repairs confirm the storage path; clean reads mean keep looking at controller/driver/cabling before replacing hardware. | risk=needs-admin
-playbook | storage | 3 | do=Update the storage controller or NVMe firmware and driver. | proves=Crashes gone after a controller/firmware update point at the storage stack; no change points back to hardware/cabling or another cause. | risk=changes-a-variable
-playbook | storage | 4 | do=Replace the drive or cable only on confirming evidence. | proves=Replacement is justified when SMART/chkdsk/cable evidence confirms it; without confirmation, do not buy storage hardware on a guess. | risk=costs-money
+playbook | storage | 1 | do=Back up important data from the affected drive now, before any more diagnostics or stress on it. | proves=A backup does not diagnose anything; it protects against data loss while the drive/cable/controller evidence is checked. | risk=reversible
+playbook | storage | 2 | do=Reseat or replace the drive data and power cabling for SATA, or reseat the NVMe module. | proves=Errors stopping after reseat/cable work points at connection/cable; errors continuing keeps the drive/controller path in suspicion. | risk=reversible
+playbook | storage | 3 | do=Run a full SMART read and chkdsk from an elevated shell. | proves=SMART errors or file-system repairs confirm the storage path; clean reads mean keep looking at controller/driver/cabling before replacing hardware. | risk=needs-admin
+playbook | storage | 4 | do=Update the storage controller or NVMe firmware and driver. | proves=Crashes gone after a controller/firmware update point at the storage stack; no change points back to hardware/cabling or another cause. | risk=changes-a-variable
+playbook | storage | 5 | do=Replace the drive or cable only on confirming evidence. | proves=Replacement is justified when SMART/chkdsk/cable evidence confirms it; without confirmation, do not buy storage hardware on a guess. | risk=costs-money
 ruled | Disk space - no volume is critically low.
 ruled | Windows Update - no recent update failures.
 ruled | Devices - no problem devices in Device Manager.

@@ -1,6 +1,6 @@
 <#PSScriptInfo
 
-.VERSION 0.4.1
+.VERSION 0.5.0
 
 .GUID 8c4b9e81-e1eb-4cb6-8b13-efd30a9d9481
 
@@ -61,7 +61,7 @@ param(
 )
 
 $ErrorActionPreference = 'Continue'
-$ScriptVersion = '0.4.1'
+$ScriptVersion = '0.5.0'
 
 # ---------------------------------------------------------------------------
 # Paths + knowledge base
@@ -1741,6 +1741,14 @@ function Get-CulpritPlaybook($Key) {
         }
         'storage-subsystem' {
             return @(
+                # Backup FIRST, exactly like the 'drive' playbook: this node fires on storage bugchecks /
+                # I/O errors BEFORE the SMART rollup degrades, so it is precisely the card a dying-but-
+                # "Healthy"-rollup drive gets - and its later steps stress the disk (chkdsk repairs,
+                # firmware flash). Audit finding 2026-07-01: no diagnostics before the data is safe.
+                (New-PlaybookStep `
+                    -Do 'Back up important data from the affected drive now, before any more diagnostics or stress on it.' `
+                    -Proves 'A backup does not diagnose anything; it protects against data loss while the drive/cable/controller evidence is checked.' `
+                    -Risk @('reversible')),
                 (New-PlaybookStep `
                     -Do 'Reseat or replace the drive data and power cabling for SATA, or reseat the NVMe module.' `
                     -Proves 'Errors stopping after reseat/cable work points at connection/cable; errors continuing keeps the drive/controller path in suspicion.' `
@@ -3135,7 +3143,11 @@ function ConvertTo-SoBool($value) {
 }
 
 function Test-SoEvidenceSchemaVersion($schema) {
-    return ([string]$schema -eq '1.0' -or [string]$schema -eq '1.1')
+    # Accept '1' too: a hand-edited / third-party baseline may store the version as a JSON NUMBER
+    # (1.0), which stringifies to '1.0' via PS 5.1's [decimal] but to '1' via PS 7's [double] -
+    # without this the SAME file is accepted on 5.1 and rejected on 7 (audit finding 2026-07-01).
+    $s = [string]$schema
+    return ($s -eq '1' -or $s -eq '1.0' -or $s -eq '1.1')
 }
 
 function ConvertTo-SoStringSet($values) {
@@ -3636,7 +3648,12 @@ function Read-SoBaselineEvidence($BaselinePath) {
         return [pscustomobject]@{ Usable = $false; Evidence = $null; Path = $target; Reason = 'baseline file was missing.' }
     }
     try {
-        $obj = Get-Content -Raw -LiteralPath $target -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+        # -Encoding UTF8 is load-bearing: the packet writer emits BOM-less UTF-8 under pwsh, and
+        # Windows PowerShell 5.1 decodes a BOM-less file as ANSI by default - a non-ASCII character
+        # in a compared field (culprit title, app name) would mojibake and produce a FALSE
+        # "top hypothesis changed" baseline diff (audit finding 2026-07-01). UTF8 reads both
+        # BOM-less and BOM'd files correctly on 5.1 and 7.
+        $obj = Get-Content -Raw -LiteralPath $target -Encoding UTF8 -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
         $schema = [string](Get-SoPathValue $obj @('SchemaVersion') '')
         if (-not (Test-SoEvidenceSchemaVersion $schema)) {
             if ([string]::IsNullOrWhiteSpace($schema)) { $schema = 'missing' }
