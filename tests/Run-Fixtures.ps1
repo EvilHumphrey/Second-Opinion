@@ -87,6 +87,8 @@ $asserts = @(
     @{ N = 'gpu-failure-01-intake: clean-install/DDU adds the software-ruled-out evidence to the GPU node'; F = 'gpu-failure-01-intake'; C = { param($d) $g = @($d.Culprits | Where-Object { $_.TierClass -eq 'gpu' }) | Select-Object -First 1; [bool]$g -and [bool](@($g.Against) | Where-Object { $_ -match 'effectively ruled out' }) } }
     @{ N = 'gpu-failure-01-intake: GPU confirm no longer tells the user to run DDU (already done)'; F = 'gpu-failure-01-intake'; C = { param($d) $g = @($d.Culprits | Where-Object { $_.TierClass -eq 'gpu' }) | Select-Object -First 1; [bool]$g -and ($g.ConfirmBy -notmatch 'Clean-reinstall the GPU driver with DDU') -and ($g.ConfirmBy -match 'swap-test') } }
     @{ N = 'gpu-failure-01-intake: intake does not move the GPU ranking (still tier 1, High)'; F = 'gpu-failure-01-intake'; C = { param($d) $g = @($d.Culprits | Where-Object { $_.TierClass -eq 'gpu' }) | Select-Object -First 1; [bool]$g -and ($g.Tier -eq 1) -and ($g.Confidence -eq 'High') } }
+    @{ N = 'gpu-failure-01-intake: playbook progress does not move culprit order, tier, or confidence'; F = 'gpu-failure-01-intake'; C = { param($d) $base = $diags['gpu-failure-01']; $b = (@($base.Culprits | ForEach-Object { "$($_.TierClass)|$($_.Tier)|$($_.Confidence)" }) -join '>'); $x = (@($d.Culprits | ForEach-Object { "$($_.TierClass)|$($_.Tier)|$($_.Confidence)" }) -join '>'); $b -eq $x } }
+    @{ N = 'gpu-failure-01-intake: gpu/gpuhw DDU step is marked done, but the swap-test step is not'; F = 'gpu-failure-01-intake'; C = { param($d) $ok = $true; foreach ($tc in @('gpu', 'gpuhw')) { $c = @($d.Culprits | Where-Object { $_.TierClass -eq $tc }) | Select-Object -First 1; $ddu = @($c.Playbook | Where-Object { (Get-PlaybookStepValue $_ 'DoneWhen') -eq 'ddu-or-clean-install-done' }) | Select-Object -First 1; $swap = @($c.Playbook | Where-Object { ([string](Get-PlaybookStepValue $_ 'Do')) -match 'swap-test' }) | Select-Object -First 1; if (-not $ddu -or (Get-PlaybookStepValue $ddu 'Status') -ne 'already done (you reported it)' -or ((Get-PlaybookStepValue $swap 'Status') -eq 'already done (you reported it)')) { $ok = $false } }; $ok } }
     @{ N = 'gpu-failure-01-intake: an XMP-only tweak does NOT raise the manual-OC/undervolt note'; F = 'gpu-failure-01-intake'; C = { param($d) -not [bool](@($d.Notes) | Where-Object { $_ -match 'Uncontrolled variable' }) } }
     @{ N = 'intake-oc: a manual overclock/undervolt raises the uncontrolled-variable note'; F = 'intake-oc'; C = { param($d) [bool](@($d.Notes) | Where-Object { $_ -match 'Uncontrolled variable' }) } }
     @{ N = 'intake-oc: an active overclock does NOT change the WHEA verdict (still Hardware High)'; F = 'intake-oc'; C = { param($d) [bool](@($d.Culprits) | Where-Object { $_.TierClass -eq 'cpu' -and $_.Confidence -eq 'High' }) } }
@@ -206,6 +208,43 @@ foreach ($gc in $gpuhwGlobalChecks) {
     try { $ok = [bool](& $gc.C) } catch { $ok = $false }
     if ($ok) { Write-Host "OK        $($gc.N)" -ForegroundColor Green; $apass++ }
     else { Write-Host "VIOLATED  $($gc.N)" -ForegroundColor Red; $afail++ }
+}
+
+# ---- Playbook static-data guardrails: Slice 1 playbooks must keep cheap/reversible work before
+#      money steps, keep backup first for failing drives, and use only the documented risk vocabulary.
+$playbookClasses = @('gpu', 'gpuhw', 'drive', 'memory')
+$allowedPlaybookRisks = @('reversible', 'needs-admin', 'needs-reboot', 'boot-risk', 'costs-money', 'changes-a-variable')
+$playbookGlobalChecks = @(
+    @{ N = 'playbook global: every costs-money step comes after at least one non-costs-money step'; C = {
+            $bad = $false
+            foreach ($tc in $playbookClasses) {
+                $seenNonMoney = $false
+                foreach ($step in @(Get-CulpritPlaybook $tc)) {
+                    $risks = @((Get-PlaybookStepValue $step 'Risk') | ForEach-Object { [string]$_ })
+                    if ($risks -contains 'costs-money' -and -not $seenNonMoney) { $bad = $true }
+                    if ($risks -notcontains 'costs-money') { $seenNonMoney = $true }
+                }
+            }
+            -not $bad
+        } }
+    @{ N = 'playbook global: drive playbook starts with the backup step'; C = { $first = @(Get-CulpritPlaybook 'drive') | Select-Object -First 1; [bool]$first -and ([string](Get-PlaybookStepValue $first 'Do')) -match '^Back up important data now' } }
+    @{ N = 'playbook global: all risk tags use the approved vocabulary'; C = {
+            $bad = $false
+            foreach ($tc in $playbookClasses) {
+                foreach ($step in @(Get-CulpritPlaybook $tc)) {
+                    foreach ($risk in @((Get-PlaybookStepValue $step 'Risk') | ForEach-Object { [string]$_ })) {
+                        if ($allowedPlaybookRisks -notcontains $risk) { $bad = $true }
+                    }
+                }
+            }
+            -not $bad
+        } }
+)
+foreach ($pgc in $playbookGlobalChecks) {
+    $ok = $false
+    try { $ok = [bool](& $pgc.C) } catch { $ok = $false }
+    if ($ok) { Write-Host "OK        $($pgc.N)" -ForegroundColor Green; $apass++ }
+    else { Write-Host "VIOLATED  $($pgc.N)" -ForegroundColor Red; $afail++ }
 }
 
 # ---- Performance-smoke-test global invariant: the perf signals are EVIDENCE-ONLY and NEVER rank. Across the
@@ -474,6 +513,16 @@ $htmlIntake    = Render-Html   $probeSys $diags['gpu-failure-01-intake']
 $promptEmpty   = Build-AiPrompt $probeSys $diags['empty'] (New-RedactionMap $probeSys) $true
 $promptCapture = Build-AiPrompt $probeSys $diags['capture-dumps'] (New-RedactionMap $probeSys) $true
 $promptNoRuled = Build-AiPrompt $probeSys $diags['collection-failed'] (New-RedactionMap $probeSys) $true  # RuledOut is empty
+$promptGpuFailure01   = Build-AiPrompt $probeSys $diags['gpu-failure-01'] (New-RedactionMap $probeSys) $true
+$htmlGpuFailure01     = Render-Html   $probeSys $diags['gpu-failure-01']
+$promptGpuhw   = Build-AiPrompt $probeSys $diags['gpuhw-tdr-vendor'] (New-RedactionMap $probeSys) $true
+$htmlGpuhw     = Render-Html   $probeSys $diags['gpuhw-tdr-vendor']
+$promptDrive   = Build-AiPrompt $probeSys $diags['multi-bad-drive'] (New-RedactionMap $probeSys) $true
+$htmlDrive     = Render-Html   $probeSys $diags['multi-bad-drive']
+$promptMemory  = Build-AiPrompt $probeSys $diags['memdiag-zero-crash'] (New-RedactionMap $probeSys) $true
+$htmlMemory    = Render-Html   $probeSys $diags['memdiag-zero-crash']
+$promptKp41    = Build-AiPrompt $probeSys $diags['only-kp41'] (New-RedactionMap $probeSys) $true
+$htmlKp41      = Render-Html   $probeSys $diags['only-kp41']
 $promptXmp     = Build-AiPrompt $probeSys $diags['xmp-off'] (New-RedactionMap $probeSys) $true
 $promptSmart52 = Build-AiPrompt $probeSys $diags['smart52-alone'] (New-RedactionMap $probeSys) $true
 $htmlSmart52   = Render-Html   $probeSys $diags['smart52-alone']
@@ -487,11 +536,16 @@ $htmlPerfClean      = Render-Html   $probeSys $diags['perf-clean']
 $renderChecks = @(
     @{ N = 'render: AI prompt carries a USER-REPORTED SYMPTOMS block when intake is present'; C = { $promptIntake -match '=== USER-REPORTED SYMPTOMS' } }
     @{ N = 'render: that block sits ABOVE the SYSTEM section (top of the prompt)'; C = { ($promptIntake.IndexOf('=== USER-REPORTED SYMPTOMS') -ge 0) -and ($promptIntake.IndexOf('=== USER-REPORTED SYMPTOMS') -lt $promptIntake.IndexOf('=== SYSTEM ===')) } }
-    @{ N = 'render: GPU confirm step in the prompt drops the already-done DDU (swap-test instead)'; C = { ($promptIntake -notmatch 'Clean-reinstall the GPU driver with DDU') -and ($promptIntake -match 'swap-test the GPU instead') } }
+    @{ N = 'render: GPU compact confirm retargets to swap-test while playbook keeps DDU visibly DONE'; C = { ($promptIntake -match 'confirm: The clean driver reinstall .*swap-test the GPU instead') -and ($promptIntake -match 'DONE \(you reported it\): Clean-reinstall the GPU driver') } }
     @{ N = 'render: report carries a "What you reported" card when intake is present'; C = { $htmlIntake -match 'What you reported' } }
     @{ N = 'render: no intake -> no USER-REPORTED block (the block is conditional)'; C = { $promptEmpty -notmatch '=== USER-REPORTED SYMPTOMS' } }
     @{ N = 'render: AI prompt carries an ALREADY CHECKED (ruled-out) section when signals were cleared'; C = { $promptIntake -match '=== ALREADY CHECKED' } }
     @{ N = 'render: nothing ruled out -> no ALREADY CHECKED section (the section is conditional)'; C = { $promptNoRuled -notmatch '=== ALREADY CHECKED' } }
+    @{ N = 'render: GPU playbook reaches report.html and AI prompt, numbered with risk tags'; C = { ($htmlGpuFailure01 -match 'confirm playbook:') -and ($htmlGpuFailure01 -match '<li>Clean-reinstall the GPU driver') -and ($htmlGpuFailure01 -match '\[changes a variable\]') -and ($promptGpuFailure01 -match '(?m)^\s+1\. Clean-reinstall the GPU driver') -and ($promptGpuFailure01 -match '\[reversible\]') } }
+    @{ N = 'render: GPU-hardware playbook reaches report.html and AI prompt, including RMA last'; C = { ($htmlGpuhw -match 'Only after swap-test evidence, RMA or replace') -and ($htmlGpuhw -match '\[costs money\]') -and ($promptGpuhw -match '(?m)^\s+3\. Only after swap-test evidence, RMA or replace') } }
+    @{ N = 'render: drive playbook reaches report.html and AI prompt with backup first'; C = { ($htmlDrive -match '<li>Back up important data now') -and ($promptDrive -match '(?m)^\s+1\. Back up important data now') -and ($promptDrive -match '\[needs admin\]') } }
+    @{ N = 'render: memory playbook reaches report.html and AI prompt with stock-speed retest first'; C = { ($htmlMemory -match '<li>If XMP/EXPO/DOCP is active') -and ($promptMemory -match '(?m)^\s+1\. If XMP/EXPO/DOCP is active') -and ($promptMemory -match '\[needs reboot\]') } }
+    @{ N = 'render: nodes without playbooks stay flat (no playbook block in only-kp41)'; C = { ($promptKp41 -notmatch 'playbook:') -and ($htmlKp41 -notmatch 'confirm playbook:') } }
     @{ N = 'render: the capture-the-next-crash card reaches the AI prompt'; C = { $promptCapture -match 'Capture the next crash' } }
     @{ N = 'render: the XMP-off performance tip reaches the AI prompt'; C = { $promptXmp -match 'Performance tip' } }
     @{ N = 'render: the report carries a "What was checked this run" readability matrix'; C = { $htmlIntake -match 'What was checked this run' } }
@@ -651,8 +705,27 @@ $packetWeak = New-HelperPacketArtifacts $redSys $diags['whea-corrected'] $redMap
 $packetSentinel = New-HelperPacketArtifacts $redSys $diags['empty'] $redMap $packetStamp
 $packetPartial = New-HelperPacketArtifacts $redSys $diags['partial-readable'] $redMap $packetStamp
 $packetPerf = New-HelperPacketArtifacts $redSys $diags['perf-throttle-observed'] $redMap $packetStamp
+$packetGpuFailure01 = New-HelperPacketArtifacts $redSys $diags['gpu-failure-01'] $redMap $packetStamp
+$packetGpuhw = New-HelperPacketArtifacts $redSys $diags['gpuhw-tdr-vendor'] $redMap $packetStamp
+$packetDrive = New-HelperPacketArtifacts $redSys $diags['multi-bad-drive'] $redMap $packetStamp
+$packetMemory = New-HelperPacketArtifacts $redSys $diags['memdiag-zero-crash'] $redMap $packetStamp
 $packetAllText = (@($packetSentinel.Values) -join "`n")
 $packetEvidenceObj = $packetSentinel['redacted-evidence.json'] | ConvertFrom-Json
+$packetGpuFailure01EvidenceObj = $packetGpuFailure01['redacted-evidence.json'] | ConvertFrom-Json
+$packetPlaybookText = (@($packetGpuFailure01.Values) + @($packetGpuhw.Values) + @($packetDrive.Values) + @($packetMemory.Values)) -join "`n"
+$hostilePlaybookMarker = 'PLAYBOOK-HOSTILE-MARKER'
+$hostilePlaybookDiag = New-Diagnosis (_data @{
+    Crashes = @( (_crash 0 'BugCheck 1001' '0x116'), (_crash -200 'BugCheck 1001' '0x116') )
+    GpuModel = $hostilePlaybookMarker
+    Drives = @( (_drive 'Generic SSD' 'SSD' 500 'Healthy' $true) )
+    Volumes = @( (_vol 'C:' 200 465 $false) )
+})
+$hostilePlaybookPrompt = Build-AiPrompt $redSys $hostilePlaybookDiag $redMap $true
+$hostilePromptPlaybookBlock = ([regex]::Match($hostilePlaybookPrompt, '(?s)playbook:\r?\n(.*?)(?:\r?\n\d+\. \[|$)')).Groups[1].Value
+$hostilePlaybookPacket = New-HelperPacketArtifacts $redSys $hostilePlaybookDiag $redMap $packetStamp
+$hostileReportPlaybookBlock = ([regex]::Match($hostilePlaybookPacket['report.html'], '(?s)confirm playbook:.*?</ol>')).Value
+$hostileEvidenceObj = $hostilePlaybookPacket['redacted-evidence.json'] | ConvertFrom-Json
+$hostileEvidencePlaybookText = ((@($hostileEvidenceObj.Culprits) | Where-Object { $_.TierClass -eq 'gpu' } | Select-Object -First 1).Playbook | ConvertTo-Json -Depth 6)
 $packetBeforeFingerprint = Get-Fingerprint $diags['gpu-failure-01-intake']
 [void](New-HelperPacketArtifacts $redSys $diags['gpu-failure-01-intake'] $redMap $packetStamp)
 $packetAfterFingerprint = Get-Fingerprint $diags['gpu-failure-01-intake']
@@ -660,7 +733,10 @@ $packetChecks = @(
     @{ N = 'helper-packet: helper-summary never says healthy or clean bill'; C = { ($packetWeak['helper-summary.md'] -notmatch '(?i)healthy') -and ($packetWeak['helper-summary.md'] -notmatch '(?i)clean bill') } }
     @{ N = 'helper-packet: all artifacts mask sentinel host/user/serial'; C = { ($packetAllText -notmatch 'DESKTOP-RED01') -and ($packetAllText -notmatch 'redacted_user') -and ($packetAllText -notmatch 'SN-REDACT-77') -and ($packetAllText -match '\[HOST_1\]') -and ($packetAllText -match '\[USER_1\]') -and ($packetAllText -match '\[SERIAL_1\]') } }
     @{ N = 'helper-packet: all artifacts mask MAC, IPv4, and IPv6 sentinels'; C = { ($packetAllText -notmatch '00:1A:2B:3C:4D:5E') -and ($packetAllText -notmatch '192\.168\.1\.42') -and ($packetAllText -notmatch 'fe80::abcd') -and ($packetAllText -notmatch '2001:db8::42') -and ($packetAllText -match '\[MAC\]') -and ($packetAllText -match '\[IP\]') -and ($packetAllText -match '\[IPV6\]') } }
-    @{ N = 'helper-packet: redacted-evidence.json carries SchemaVersion and version stamp'; C = { ($packetEvidenceObj.SchemaVersion -eq '1.0') -and ($packetEvidenceObj.VersionStamp.ToolVersion -eq $ScriptVersion) -and ($packetEvidenceObj.VersionStamp.KbHash -eq 'TEST-KB-HASH') -and ($packetEvidenceObj.VersionStamp.GitSha -eq 'abc1234') } }
+    @{ N = 'helper-packet: redacted-evidence.json carries SchemaVersion and version stamp'; C = { ($packetEvidenceObj.SchemaVersion -eq '1.1') -and ($packetEvidenceObj.VersionStamp.ToolVersion -eq $ScriptVersion) -and ($packetEvidenceObj.VersionStamp.KbHash -eq 'TEST-KB-HASH') -and ($packetEvidenceObj.VersionStamp.GitSha -eq 'abc1234') } }
+    @{ N = 'helper-packet: redacted-evidence.json carries structured playbook steps'; C = { $g = @($packetGpuFailure01EvidenceObj.Culprits | Where-Object { $_.TierClass -eq 'gpu' }) | Select-Object -First 1; [bool]$g -and (@($g.Playbook).Count -ge 2) -and (@($g.Playbook[0].Risk) -contains 'reversible') -and ($g.Playbook[0].Do -match 'Clean-reinstall') } }
+    @{ N = 'helper-packet: packet artifacts carry all four Slice 1 playbooks'; C = { ($packetPlaybookText -match 'Clean-reinstall the GPU driver') -and ($packetPlaybookText -match 'Only after swap-test evidence, RMA or replace') -and ($packetPlaybookText -match 'Back up important data now') -and ($packetPlaybookText -match 'If XMP/EXPO/DOCP is active') } }
+    @{ N = 'helper-packet: hostile dynamic marker does not enter playbook blocks in share-safe sinks'; C = { ($hostilePromptPlaybookBlock.Length -gt 0) -and ($hostileReportPlaybookBlock.Length -gt 0) -and ($hostileEvidencePlaybookText.Length -gt 0) -and ($hostilePromptPlaybookBlock -notmatch $hostilePlaybookMarker) -and ($hostileReportPlaybookBlock -notmatch $hostilePlaybookMarker) -and ($hostileEvidencePlaybookText -notmatch $hostilePlaybookMarker) } }
     @{ N = 'helper-packet: unreadable-signals lists unreadable rows on partial-readable'; C = { ($packetPartial['unreadable-signals.txt'] -match 'Drive health') -and ($packetPartial['unreadable-signals.txt'] -match 'Hardware-error log') -and ($packetPartial['unreadable-signals.txt'] -match 'Treat each one as unknown') } }
     @{ N = 'helper-packet: redaction audit lists counts without masked values'; C = { ($packetSentinel['redaction-audit.txt'] -notmatch 'DESKTOP-RED01|redacted_user|SN-REDACT-77') -and ($packetSentinel['redaction-audit.txt'] -match 'Hostnames masked: [1-9]') -and ($packetSentinel['redaction-audit.txt'] -match 'Usernames masked: [1-9]') -and ($packetSentinel['redaction-audit.txt'] -match 'Serials masked: [1-9]') -and ($packetSentinel['redaction-audit.txt'] -match 'MAC addresses masked: [1-9]') -and ($packetSentinel['redaction-audit.txt'] -match 'IPv4 addresses masked: [1-9]') -and ($packetSentinel['redaction-audit.txt'] -match 'IPv6 addresses masked: [1-9]') } }
     @{ N = 'helper-packet: building the packet does not mutate the diagnosis fingerprint'; C = { $packetBeforeFingerprint -eq $packetAfterFingerprint } }

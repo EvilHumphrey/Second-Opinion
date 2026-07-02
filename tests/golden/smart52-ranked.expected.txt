@@ -1,5 +1,8 @@
 counts crashes=0 distinct=0 unexplained=0 appcrash=0
 culprit | Drive health: a failing SSD (500 GB) | drive | 1 | High
+playbook | drive | 1 | do=Back up important data now, before any more diagnostics or stress on the drive. | proves=A backup does not diagnose the drive; it protects against data loss while the evidence is checked. | risk=reversible
+playbook | drive | 2 | do=Run a full SMART read elevated, or use CrystalDiskInfo/smartctl, and check health plus reallocated, pending, and media-error counts. | proves=Bad SMART health or growing media errors confirms the drive path; a clean full SMART read means keep looking, but keep the backup. | risk=needs-admin
+playbook | drive | 3 | do=Plan replacement only after the backup is safe and SMART evidence confirms the drive is failing. | proves=Confirmed failing SMART evidence justifies replacement; without that confirmation, do not replace the drive on a guess. | risk=costs-money
 ruled | Disk space - no volume is critically low.
 ruled | Windows Update - no recent update failures.
 ruled | Devices - no problem devices in Device Manager.

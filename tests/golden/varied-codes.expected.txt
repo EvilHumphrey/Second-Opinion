@@ -1,5 +1,8 @@
 counts crashes=3 distinct=3 unexplained=0 appcrash=0
 culprit | Memory / RAM | memory | 2 | Medium
+playbook | memory | 1 | do=If XMP/EXPO/DOCP is active, drop RAM to stock speed and re-test first. | proves=Crashes gone at stock speed = the memory profile was unstable; still crashing at stock points past the profile. | risk=reversible,needs-reboot,changes-a-variable
+playbook | memory | 2 | do=Run MemTest86 overnight, or Windows Memory Diagnostic, after the stock-speed retest. | proves=A failing pass confirms the memory path; a clean pass reduces confidence but does not prove intermittent RAM is impossible. | risk=needs-reboot
+playbook | memory | 3 | do=Replace or RMA RAM only on a failing diagnostic pass or repeatable stock-speed failure. | proves=A failing pass or repeatable stock-speed failure justifies replacement; without that, do not buy RAM on a guess. | risk=costs-money
 note | 3 crashes span 3 different stop codes - varied codes lean toward a hardware cause (RAM, power, or thermal).
 ruled | Drive health - all drives report SMART status Healthy.
 ruled | Disk space - no volume is critically low.

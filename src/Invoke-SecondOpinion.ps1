@@ -1613,7 +1613,7 @@ function Format-IntakeLines($intake) {
 # Scorer (deterministic - this assigns tiers + confidence, never the AI)
 # ---------------------------------------------------------------------------
 function New-Culprit {
-    param($Title, $TierClass, $Tier, $Confidence, [string[]]$For, [string[]]$Against, $ConfirmBy, $Search, [int]$Prominence = 0)
+    param($Title, $TierClass, $Tier, $Confidence, [string[]]$For, [string[]]$Against, $ConfirmBy, $Search, $Playbook = $null, [int]$Prominence = 0)
     [pscustomobject]@{
         Title      = $Title
         TierClass  = $TierClass
@@ -1624,6 +1624,179 @@ function New-Culprit {
         Against    = @($Against | Where-Object { $_ -and ([string]$_).Trim() -ne '' })
         ConfirmBy  = $ConfirmBy
         Search     = $Search
+        Playbook   = if ($null -ne $Playbook) { @($Playbook) } else { $null }
+    }
+}
+
+function New-PlaybookStep {
+    param([string]$Do, [string]$Proves, [string[]]$Risk, [string]$DoneWhen = '')
+    $step = [ordered]@{
+        Do     = $Do
+        Proves = $Proves
+        Risk   = @($Risk)
+    }
+    if (-not [string]::IsNullOrWhiteSpace($DoneWhen)) { $step['DoneWhen'] = $DoneWhen }
+    return $step
+}
+
+function Get-PlaybookSteps($Playbook) {
+    $steps = @()
+    foreach ($step in @($Playbook)) {
+        if ($null -ne $step) { $steps += $step }
+    }
+    return $steps
+}
+
+function Get-CulpritPlaybook($TierClass) {
+    switch ([string]$TierClass) {
+        'gpu' {
+            return @(
+                (New-PlaybookStep `
+                    -Do 'Clean-reinstall the GPU driver with DDU (Display Driver Uninstaller), or roll back to a known-good driver version.' `
+                    -Proves 'Crashes gone after a clean driver path = the driver was the cause; still crashing on known-good drivers = points past the driver.' `
+                    -Risk @('reversible', 'changes-a-variable') `
+                    -DoneWhen 'ddu-or-clean-install-done'),
+                (New-PlaybookStep `
+                    -Do 'If crashes continue on known-good drivers, swap-test the GPU: borrow a known-good card for this PC, or move this card into another PC before buying anything.' `
+                    -Proves 'The symptom following this card, or disappearing with a known-good card, is proof toward the card; no change points back to the rest of the system.' `
+                    -Risk @('changes-a-variable', 'costs-money'))
+            )
+        }
+        'gpuhw' {
+            return @(
+                (New-PlaybookStep `
+                    -Do 'Rule the driver out first: clean-reinstall with DDU (Display Driver Uninstaller), or roll back to a known-good driver version.' `
+                    -Proves 'Crashes gone after a clean driver path = the driver was the cause; still crashing on known-good drivers keeps the card itself in suspicion.' `
+                    -Risk @('reversible', 'changes-a-variable') `
+                    -DoneWhen 'ddu-or-clean-install-done'),
+                (New-PlaybookStep `
+                    -Do 'Swap-test the GPU: move this card into another PC, or drop a known-good card into this one.' `
+                    -Proves 'A swap that changes the symptom is the proof that isolates the card from the rest of the system.' `
+                    -Risk @('changes-a-variable')),
+                (New-PlaybookStep `
+                    -Do 'Only after swap-test evidence, RMA or replace the graphics card.' `
+                    -Proves 'Replacement is justified only when the symptom follows the card or disappears with a known-good card; otherwise do not buy on this report alone.' `
+                    -Risk @('costs-money'))
+            )
+        }
+        'drive' {
+            return @(
+                (New-PlaybookStep `
+                    -Do 'Back up important data now, before any more diagnostics or stress on the drive.' `
+                    -Proves 'A backup does not diagnose the drive; it protects against data loss while the evidence is checked.' `
+                    -Risk @('reversible')),
+                (New-PlaybookStep `
+                    -Do 'Run a full SMART read elevated, or use CrystalDiskInfo/smartctl, and check health plus reallocated, pending, and media-error counts.' `
+                    -Proves 'Bad SMART health or growing media errors confirms the drive path; a clean full SMART read means keep looking, but keep the backup.' `
+                    -Risk @('needs-admin')),
+                (New-PlaybookStep `
+                    -Do 'Plan replacement only after the backup is safe and SMART evidence confirms the drive is failing.' `
+                    -Proves 'Confirmed failing SMART evidence justifies replacement; without that confirmation, do not replace the drive on a guess.' `
+                    -Risk @('costs-money'))
+            )
+        }
+        'memory' {
+            return @(
+                (New-PlaybookStep `
+                    -Do 'If XMP/EXPO/DOCP is active, drop RAM to stock speed and re-test first.' `
+                    -Proves 'Crashes gone at stock speed = the memory profile was unstable; still crashing at stock points past the profile.' `
+                    -Risk @('reversible', 'needs-reboot', 'changes-a-variable')),
+                (New-PlaybookStep `
+                    -Do 'Run MemTest86 overnight, or Windows Memory Diagnostic, after the stock-speed retest.' `
+                    -Proves 'A failing pass confirms the memory path; a clean pass reduces confidence but does not prove intermittent RAM is impossible.' `
+                    -Risk @('needs-reboot')),
+                (New-PlaybookStep `
+                    -Do 'Replace or RMA RAM only on a failing diagnostic pass or repeatable stock-speed failure.' `
+                    -Proves 'A failing pass or repeatable stock-speed failure justifies replacement; without that, do not buy RAM on a guess.' `
+                    -Risk @('costs-money'))
+            )
+        }
+    }
+    return $null
+}
+
+function Get-PlaybookStepValue($Step, [string]$Key) {
+    if ($null -eq $Step) { return $null }
+    if ($Step -is [System.Collections.IDictionary]) {
+        if ($Step.Contains($Key)) { return $Step[$Key] }
+        return $null
+    }
+    $prop = $Step.PSObject.Properties[$Key]
+    if ($prop) { return $prop.Value }
+    return $null
+}
+
+function Set-PlaybookStepValue($Step, [string]$Key, $Value) {
+    if ($null -eq $Step) { return }
+    if ($Step -is [System.Collections.IDictionary]) {
+        $Step[$Key] = $Value
+    } else {
+        $Step | Add-Member -NotePropertyName $Key -NotePropertyValue $Value -Force
+    }
+}
+
+function Format-PlaybookRiskTags($Risk) {
+    $tags = @()
+    foreach ($r in @($Risk)) {
+        if (-not [string]::IsNullOrWhiteSpace([string]$r)) {
+            $tags += ('[' + ([string]$r).Replace('-', ' ') + ']')
+        }
+    }
+    return ($tags -join ' ')
+}
+
+function Get-PlaybookPlainLines($Playbook, [string]$Indent, [switch]$Protect) {
+    $lines = @()
+    $n = 1
+    foreach ($step in (Get-PlaybookSteps $Playbook)) {
+        $do = [string](Get-PlaybookStepValue $step 'Do')
+        $proves = [string](Get-PlaybookStepValue $step 'Proves')
+        if ($Protect) {
+            $do = Protect-PromptValue $do
+            $proves = Protect-PromptValue $proves
+        }
+        $status = [string](Get-PlaybookStepValue $step 'Status')
+        $prefix = ''
+        if ($status -eq 'already done (you reported it)') { $prefix = 'DONE (you reported it): ' }
+        $risk = Format-PlaybookRiskTags (Get-PlaybookStepValue $step 'Risk')
+        $riskText = ''
+        if ($risk) { $riskText = " $risk" }
+        $lines += "$Indent$n. $prefix$do$riskText"
+        $lines += "$Indent   proves: $proves"
+        $n++
+    }
+    return $lines
+}
+
+function Test-PlaybookDonePredicate($PredicateId, $Intake) {
+    if (-not $Intake) { return $false }
+    switch ([string]$PredicateId) {
+        'ddu-or-clean-install-done' {
+            foreach ($t in @($Intake.Tried)) {
+                if ($t -eq 1 -or $t -eq 2) { return $true }
+            }
+            return $false
+        }
+        default { return $false }
+    }
+}
+
+function Apply-PlaybookIntakeProgress($Culprits, $Intake) {
+    if (-not $Intake) { return }
+    $driverPathDone = Test-PlaybookDonePredicate 'ddu-or-clean-install-done' $Intake
+    foreach ($c in @($Culprits)) {
+        foreach ($step in (Get-PlaybookSteps $c.Playbook)) {
+            $doneWhen = [string](Get-PlaybookStepValue $step 'DoneWhen')
+            if ($doneWhen -and (Test-PlaybookDonePredicate $doneWhen $Intake)) {
+                Set-PlaybookStepValue $step 'Status' 'already done (you reported it)'
+            }
+        }
+        if ($driverPathDone -and $c.TierClass -eq 'gpu') {
+            $c.ConfirmBy = 'The clean driver reinstall (DDU) is already done and it still crashes, so stop reinstalling drivers - swap-test the GPU instead (a known-good card in this PC, or this card in another PC). A swap that fixes it is proof; do not RMA on a guess.'
+        }
+        if ($driverPathDone -and $c.TierClass -eq 'gpuhw') {
+            $c.ConfirmBy = 'The driver path (clean reinstall / DDU) is already done and it still crashes, so stop reinstalling drivers - swap-test the GPU now: move this card into another PC, or a known-good card into this one. A swap that changes the symptom is the proof. Do NOT RMA or replace the card on this report alone.'
+        }
     }
 }
 
@@ -1704,7 +1877,8 @@ function New-Diagnosis($data) {
         $culprits += New-Culprit -Title "Drive health: a failing $mediaLabel ($($bd.SizeGB) GB)" -TierClass 'drive' -Tier 1 -Confidence 'High' `
             -For @("Windows reports this drive's SMART health status as '$($bd.HealthStatus)'.") -Against @() `
             -ConfirmBy 'Back up important data now, then confirm with a full SMART read (CrystalDiskInfo / smartctl). Plan to replace the drive.' `
-            -Search "$mediaLabel SMART $($bd.HealthStatus) failing replace"
+            -Search "$mediaLabel SMART $($bd.HealthStatus) failing replace" `
+            -Playbook (Get-CulpritPlaybook 'drive')
     }
 
     # B. WHEA / 0x124 - always hardware.
@@ -1776,7 +1950,8 @@ function New-Diagnosis($data) {
         $culprits += New-Culprit -Title $gpuTitle -TierClass 'gpu' -Tier $tier -Confidence $conf `
             -For $gpuFor -Against $against `
             -ConfirmBy 'Clean-reinstall the GPU driver with DDU (Display Driver Uninstaller), or roll back a version. If clean drivers do NOT stop it, swap-test the GPU (a failing card behaves exactly like this) - do not RMA on a guess.' `
-            -Search $gpuSearch
+            -Search $gpuSearch `
+            -Playbook (Get-CulpritPlaybook 'gpu')
 
         # C2. GPU HARDWARE (the card itself) - a DISTINCT, secondary hypothesis to the driver node above, NOT
         # a restatement of it. In v0 every GPU signal we read (TDR / GPU bugcheck / vendor reset / flagged
@@ -1813,7 +1988,8 @@ function New-Diagnosis($data) {
             $culprits += New-Culprit -Title $hwTitle -TierClass 'gpuhw' -Tier 2 -Confidence 'Medium' `
                 -For $hwFor -Against $hwAgainst `
                 -ConfirmBy 'First rule out the driver - clean-reinstall it with DDU (Display Driver Uninstaller), or roll back a version. If crashes continue on known-good drivers, swap-test the GPU: move this card into another PC, or drop a known-good card into this one. A swap that changes the symptom is the proof. Do NOT RMA or replace the card on this report alone - the swap-test is what isolates the card from the rest of the system.' `
-                -Search $hwSearch
+                -Search $hwSearch `
+                -Playbook (Get-CulpritPlaybook 'gpuhw')
         }
     }
 
@@ -1831,8 +2007,9 @@ function New-Diagnosis($data) {
         $tier = if ($conf -eq 'High') { 1 } else { 2 }
         $culprits += New-Culprit -Title 'Memory / RAM' -TierClass 'memory' -Tier $tier -Confidence $conf `
             -For $for -Against $against `
-            -ConfirmBy 'Run MemTest86 (bootable) overnight, or Windows Memory Diagnostic. If memory is overclocked, disable XMP/EXPO first and re-test.' `
-            -Search 'Windows 11 MEMORY_MANAGEMENT 0x1A test RAM MemTest86'
+            -ConfirmBy 'If XMP/EXPO is active, drop RAM to stock and re-test first. Then run MemTest86 overnight or Windows Memory Diagnostic. Replace/RMA RAM only on a failing pass.' `
+            -Search 'Windows 11 MEMORY_MANAGEMENT 0x1A test RAM MemTest86' `
+            -Playbook (Get-CulpritPlaybook 'memory')
     }
 
     # E. Storage subsystem.
@@ -2161,26 +2338,23 @@ function New-Diagnosis($data) {
     #      4=swapped-part 5=none; Tweaks 1=XMP 2=manual-OC 3=undervolt 4=stock 5=unsure.
     $intake = $data.Intake
     if ($intake) {
-        $tried  = @($intake.Tried)
         $tweaks = @($intake.Tweaks)
+        $driverPathDone = Test-PlaybookDonePredicate 'ddu-or-clean-install-done' $intake
+        Apply-PlaybookIntakeProgress $culprits $intake
 
         # (1) A clean Windows reinstall and/or DDU is already done and it still crashes -> the software,
         #     OS, and display-driver branches are effectively ruled out; weight shifts toward hardware.
-        #     Also drop the now-redundant "do a DDU" GPU confirm step (it has been done).
-        if (($tried -contains 1) -or ($tried -contains 2)) {
+        #     The playbook progress marker keeps that already-done step visible instead of deleting it.
+        if ($driverPathDone) {
             $ruledLine = 'You report a clean Windows reinstall and/or a DDU driver wipe is already done and the symptoms persist - so software, OS, and display-driver causes are effectively ruled out. That shifts the weight toward hardware.'
             foreach ($c in $culprits) {
                 if ($c.TierClass -eq 'gpu' -or $c.TierClass -eq 'driver') { $c.Against = @($c.Against) + $ruledLine }
-                if ($c.TierClass -eq 'gpu') {
-                    $c.ConfirmBy = 'The clean driver reinstall (DDU) is already done and it still crashes, so stop reinstalling drivers - swap-test the GPU instead (a known-good card in this PC, or this card in another PC). A swap that fixes it is proof; do not RMA on a guess.'
-                }
                 # The GPU-hardware node: a done DDU is the software path the user has ALREADY eliminated, which
                 # points PAST the driver to the card (a For-line for this node, not an against-line), and makes
                 # the swap-test the decisive next step. Intake adds evidence + retargets the confirm only - it
                 # does NOT move this node's tier/confidence (it stays tier 2 / Medium).
                 if ($c.TierClass -eq 'gpuhw') {
                     $c.For = @($c.For) + 'You report a clean Windows reinstall and/or a DDU driver wipe is already done and it still crashes - that is the software/driver path eliminated, which points past the driver to the card itself. The swap-test below is now the decisive next step.'
-                    $c.ConfirmBy = 'The driver path (clean reinstall / DDU) is already done and it still crashes, so stop reinstalling drivers - swap-test the GPU now: move this card into another PC, or a known-good card into this one. A swap that changes the symptom is the proof. Do NOT RMA or replace the card on this report alone.'
                 }
             }
             $notes += 'User reports a clean Windows reinstall / DDU driver wipe was already done and crashes persist - the software and display-driver branches are treated as effectively ruled out below.'
@@ -2677,6 +2851,12 @@ function Build-AiPrompt($sys, $diag, $map, $redact) {
             foreach ($f in $c.For)     { [void]$sb.AppendLine("     for: $(Protect-PromptValue $f)") }
             foreach ($a in $c.Against)  { [void]$sb.AppendLine("     against: $(Protect-PromptValue $a)") }
             [void]$sb.AppendLine("     confirm: $(Protect-PromptValue $c.ConfirmBy)")
+            if (@(Get-PlaybookSteps $c.Playbook).Count -gt 0) {
+                [void]$sb.AppendLine('     playbook:')
+                foreach ($line in (Get-PlaybookPlainLines $c.Playbook '       ' -Protect)) {
+                    [void]$sb.AppendLine($line)
+                }
+            }
             $rank++
         }
     }
@@ -2777,6 +2957,10 @@ function ConvertTo-SoBool($value) {
     return ([string]$value) -eq 'True'
 }
 
+function Test-SoEvidenceSchemaVersion($schema) {
+    return ([string]$schema -eq '1.0' -or [string]$schema -eq '1.1')
+}
+
 function ConvertTo-SoStringSet($values) {
     $items = @()
     foreach ($v in @($values)) {
@@ -2867,6 +3051,25 @@ function Build-HelperSummary($sys, $diag, $stamp) {
     return $sb.ToString()
 }
 
+function ConvertTo-PlaybookEvidence($Playbook) {
+    $steps = @(Get-PlaybookSteps $Playbook)
+    if ($steps.Count -eq 0) { return $null }
+    $items = @()
+    foreach ($step in $steps) {
+        $status = [string](Get-PlaybookStepValue $step 'Status')
+        $doneWhen = [string](Get-PlaybookStepValue $step 'DoneWhen')
+        $item = [ordered]@{
+            Do     = [string](Get-PlaybookStepValue $step 'Do')
+            Proves = [string](Get-PlaybookStepValue $step 'Proves')
+            Risk   = @((Get-PlaybookStepValue $step 'Risk') | ForEach-Object { [string]$_ })
+        }
+        if ($status) { $item['Status'] = $status }
+        if ($doneWhen) { $item['DoneWhen'] = $doneWhen }
+        $items += [pscustomobject]$item
+    }
+    return , $items
+}
+
 function New-SoEvidenceObject($sys, $diag, $stamp) {
     $culprits = @()
     foreach ($c in @($diag.Culprits)) {
@@ -2879,6 +3082,7 @@ function New-SoEvidenceObject($sys, $diag, $stamp) {
             Against    = @($c.Against)
             ConfirmBy  = [string]$c.ConfirmBy
             DoNotDoYet = Get-PacketDoNotDoYet $c
+            Playbook   = ConvertTo-PlaybookEvidence $c.Playbook
         }
     }
     $readability = @()
@@ -2933,7 +3137,7 @@ function New-SoEvidenceObject($sys, $diag, $stamp) {
         }
     }
     $evidence = [ordered]@{
-        SchemaVersion = '1.0'
+        SchemaVersion = '1.1'
         VersionStamp  = [pscustomobject][ordered]@{
             ToolVersion = [string]$stamp.ToolVersion
             KbHash      = [string]$stamp.KbHash
@@ -3072,9 +3276,9 @@ function Compare-SoEvidence($baselineObj, $diag) {
         return (New-SoBaselineDiffAbstention 'baseline JSON was not available.')
     }
     $schema = [string](Get-SoPathValue $baselineObj @('SchemaVersion') '')
-    if ($schema -ne '1.0') {
+    if (-not (Test-SoEvidenceSchemaVersion $schema)) {
         if ([string]::IsNullOrWhiteSpace($schema)) { $schema = 'missing' }
-        return (New-SoBaselineDiffAbstention "baseline SchemaVersion '$schema' is not supported; expected 1.0.")
+        return (New-SoBaselineDiffAbstention "baseline SchemaVersion '$schema' is not supported; expected 1.0 or 1.1.")
     }
 
     $current = Get-SoEvidenceForDiff $diag
@@ -3251,9 +3455,9 @@ function Read-SoBaselineEvidence($BaselinePath) {
     try {
         $obj = Get-Content -Raw -LiteralPath $target -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
         $schema = [string](Get-SoPathValue $obj @('SchemaVersion') '')
-        if ($schema -ne '1.0') {
+        if (-not (Test-SoEvidenceSchemaVersion $schema)) {
             if ([string]::IsNullOrWhiteSpace($schema)) { $schema = 'missing' }
-            return [pscustomobject]@{ Usable = $false; Evidence = $obj; Path = $target; Reason = "baseline SchemaVersion '$schema' is not supported; expected 1.0." }
+            return [pscustomobject]@{ Usable = $false; Evidence = $obj; Path = $target; Reason = "baseline SchemaVersion '$schema' is not supported; expected 1.0 or 1.1." }
         }
         return [pscustomobject]@{ Usable = $true; Evidence = $obj; Path = $target; Reason = '' }
     } catch {
@@ -3468,6 +3672,12 @@ h1{font-size:22px;font-weight:600;margin:0}
 .ag .mk{color:var(--red);font-weight:600}
 .confirm{font-size:13.5px;margin-top:9px;padding-top:9px;border-top:1px solid var(--line)}
 .confirm .lbl{color:var(--muted)}
+.confirm.playbook{margin-top:0}
+.playbook ol{margin:6px 0 0;padding-left:22px}
+.playbook li{margin:7px 0}
+.playbook .risk{color:var(--muted);font-size:12px}
+.playbook .done{font-weight:600;color:var(--green)}
+.playbook .proof{font-size:12.5px;color:var(--muted);margin-top:2px}
 .search{font-size:12.5px;margin-top:7px;color:var(--blue);word-break:break-word}
 .ruled{background:var(--greenbg);border-radius:8px;padding:12px 16px;font-size:13.5px;color:var(--green)}
 .ruled ul{margin:6px 0 0;padding-left:18px}
@@ -3551,6 +3761,19 @@ td.k{color:var(--muted);width:42%}
             foreach ($f in $c.For)    { [void]$sb.AppendLine("<p class=""ev for""><span class=""mk"">+</span> <span class=""lbl"">for:</span> $(ConvertTo-HtmlText $f)</p>") }
             foreach ($a in $c.Against) { [void]$sb.AppendLine("<p class=""ev ag""><span class=""mk"">&minus;</span> <span class=""lbl"">against:</span> $(ConvertTo-HtmlText $a)</p>") }
             [void]$sb.AppendLine("<p class=""confirm""><span class=""lbl"">confirm by:</span> $(ConvertTo-HtmlText $c.ConfirmBy)</p>")
+            if (@(Get-PlaybookSteps $c.Playbook).Count -gt 0) {
+                [void]$sb.AppendLine('<div class="confirm playbook"><span class="lbl">confirm playbook:</span><ol>')
+                foreach ($step in (Get-PlaybookSteps $c.Playbook)) {
+                    $status = [string](Get-PlaybookStepValue $step 'Status')
+                    $prefix = ''
+                    if ($status -eq 'already done (you reported it)') { $prefix = '<span class="done">DONE (you reported it):</span> ' }
+                    $risk = Format-PlaybookRiskTags (Get-PlaybookStepValue $step 'Risk')
+                    $riskText = ''
+                    if ($risk) { $riskText = " <span class=""risk"">$(ConvertTo-HtmlText $risk)</span>" }
+                    [void]$sb.AppendLine("<li>$prefix$(ConvertTo-HtmlText (Get-PlaybookStepValue $step 'Do'))$riskText<div class=""proof""><span class=""lbl"">proves:</span> $(ConvertTo-HtmlText (Get-PlaybookStepValue $step 'Proves'))</div></li>")
+                }
+                [void]$sb.AppendLine('</ol></div>')
+            }
             if ($c.Search) { [void]$sb.AppendLine("<p class=""search"">search: $(ConvertTo-HtmlText $c.Search)</p>") }
             [void]$sb.AppendLine('</div>')
         }

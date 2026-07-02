@@ -1,7 +1,12 @@
 counts crashes=2 distinct=1 unexplained=37 appcrash=3
 culprit | GPU display driver (NVIDIA GeForce RTX 3060 Ti) | gpu | 1 | High
+playbook | gpu | 1 | do=Clean-reinstall the GPU driver with DDU (Display Driver Uninstaller), or roll back to a known-good driver version. | proves=Crashes gone after a clean driver path = the driver was the cause; still crashing on known-good drivers = points past the driver. | risk=reversible,changes-a-variable | status=already done (you reported it)
+playbook | gpu | 2 | do=If crashes continue on known-good drivers, swap-test the GPU: borrow a known-good card for this PC, or move this card into another PC before buying anything. | proves=The symptom following this card, or disappearing with a known-good card, is proof toward the card; no change points back to the rest of the system. | risk=changes-a-variable,costs-money
 culprit | 37 unexpected restarts with no recorded cause - a frequent hard-reset pattern, the dominant symptom on this PC | power | checklist | Insufficient prom=37
 culprit | GPU hardware (NVIDIA GeForce RTX 3060 Ti) | gpuhw | 2 | Medium
+playbook | gpuhw | 1 | do=Rule the driver out first: clean-reinstall with DDU (Display Driver Uninstaller), or roll back to a known-good driver version. | proves=Crashes gone after a clean driver path = the driver was the cause; still crashing on known-good drivers keeps the card itself in suspicion. | risk=reversible,changes-a-variable | status=already done (you reported it)
+playbook | gpuhw | 2 | do=Swap-test the GPU: move this card into another PC, or drop a known-good card into this one. | proves=A swap that changes the symptom is the proof that isolates the card from the rest of the system. | risk=changes-a-variable
+playbook | gpuhw | 3 | do=Only after swap-test evidence, RMA or replace the graphics card. | proves=Replacement is justified only when the symptom follows the card or disappears with a known-good card; otherwise do not buy on this report alone. | risk=costs-money
 culprit | This pattern may need hands-on hardware testing | handoff | checklist | Insufficient
 note | All 2 system crashes share one stop code (0x116) - a consistent pattern leans toward a single software/driver cause.
 note | User reports a clean Windows reinstall / DDU driver wipe was already done and crashes persist - the software and display-driver branches are treated as effectively ruled out below.

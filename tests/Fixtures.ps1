@@ -565,6 +565,15 @@ function Get-Fingerprint($diag) {
         $prom = ''
         if ($c.PSObject.Properties['Prominence'] -and [int]$c.Prominence -gt 0) { $prom = " prom=$($c.Prominence)" }
         $lines += "culprit | $($c.Title) | $($c.TierClass) | $($c.Tier) | $($c.Confidence)$prom"
+        $stepNum = 1
+        foreach ($step in (Get-PlaybookSteps $c.Playbook)) {
+            $status = [string](Get-PlaybookStepValue $step 'Status')
+            $statusText = ''
+            if ($status) { $statusText = " | status=$status" }
+            $risk = (@((Get-PlaybookStepValue $step 'Risk') | ForEach-Object { [string]$_ }) -join ',')
+            $lines += "playbook | $($c.TierClass) | $stepNum | do=$([string](Get-PlaybookStepValue $step 'Do')) | proves=$([string](Get-PlaybookStepValue $step 'Proves')) | risk=$risk$statusText"
+            $stepNum++
+        }
     }
     foreach ($n in @($diag.Notes))    { $lines += "note | $n" }
     foreach ($o in @($diag.Observed)) { $lines += "observed | $o" }
