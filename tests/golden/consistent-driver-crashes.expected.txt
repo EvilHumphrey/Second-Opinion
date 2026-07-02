@@ -1,5 +1,8 @@
 counts crashes=3 distinct=1 unexplained=0 appcrash=0
 culprit | A specific driver or software (0xD1 DRIVER_IRQL_NOT_LESS_OR_EQUAL) | driver | 2 | Medium
+playbook | driver | 1 | do=Recall what changed most recently - driver, Windows update, or new app - and roll it back. | proves=Crashes gone after rollback = that change was the cause; crashes continuing means the recent change was not enough to explain it. | risk=reversible,changes-a-variable
+playbook | driver | 2 | do=Update or clean-reinstall the suspect driver. | proves=Crashes gone on a known-good driver path = the driver was the cause; no change means this needs deeper evidence. | risk=changes-a-variable
+playbook | driver | 3 | do=If the same stop code continues on a rolled-back or known-good driver, capture the next crash dump so deep mode can name the module. | proves=A dump that names a third-party module focuses the driver lead; a dump that does not name one keeps this as a pattern, not proof. | risk=reversible
 note | All 3 system crashes share one stop code (0xD1) - a consistent pattern leans toward a single software/driver cause.
 ruled | Drive health - all drives report SMART status Healthy.
 ruled | Disk space - no volume is critically low.

@@ -1647,8 +1647,16 @@ function Get-PlaybookSteps($Playbook) {
     return $steps
 }
 
-function Get-CulpritPlaybook($TierClass) {
-    switch ([string]$TierClass) {
+function Get-CulpritPlaybookKeys {
+    return @(
+        'gpu', 'gpuhw', 'drive', 'memory',
+        'cpu', 'storage-subsystem', 'driver-recent', 'power', 'disk-space',
+        'device', 'app', 'handoff', 'capture'
+    )
+}
+
+function Get-CulpritPlaybook($Key) {
+    switch ([string]$Key) {
         'gpu' {
             return @(
                 (New-PlaybookStep `
@@ -1709,6 +1717,166 @@ function Get-CulpritPlaybook($TierClass) {
                     -Do 'Replace or RMA RAM only on a failing diagnostic pass or repeatable stock-speed failure.' `
                     -Proves 'A failing pass or repeatable stock-speed failure justifies replacement; without that, do not buy RAM on a guess.' `
                     -Risk @('costs-money'))
+            )
+        }
+        'cpu' {
+            return @(
+                (New-PlaybookStep `
+                    -Do 'Remove any CPU/RAM overclock - including XMP/DOCP/EXPO - and re-test at stock settings.' `
+                    -Proves 'Crashes gone at stock settings = the overclock/profile was unstable; WHEA errors still present at stock point toward hardware, cooling, or power.' `
+                    -Risk @('reversible', 'needs-reboot', 'changes-a-variable')),
+                (New-PlaybookStep `
+                    -Do 'Verify cooling: watch temperatures under load, clean dust, and confirm fans spin normally.' `
+                    -Proves 'Errors gone after cooling is corrected = heat was a trigger; errors still present with good temperatures point past simple cooling.' `
+                    -Risk @('reversible')),
+                (New-PlaybookStep `
+                    -Do 'Check PSU adequacy and CPU/GPU power cabling; swap-test the PSU if a spare exists.' `
+                    -Proves 'A symptom change with a known-good PSU/cabling points at power delivery; no change keeps CPU/RAM/motherboard in suspicion.' `
+                    -Risk @('changes-a-variable')),
+                (New-PlaybookStep `
+                    -Do 'If WHEA errors persist at stock with good temperatures and power, plan replacement of the implicated component when the WHEA source line names one.' `
+                    -Proves 'Persistent WHEA at stock after cooling/power checks is confirming evidence; if WHEA stops, replacement is not justified from this run alone.' `
+                    -Risk @('costs-money'))
+            )
+        }
+        'storage-subsystem' {
+            return @(
+                (New-PlaybookStep `
+                    -Do 'Reseat or replace the drive data and power cabling for SATA, or reseat the NVMe module.' `
+                    -Proves 'Errors stopping after reseat/cable work points at connection/cable; errors continuing keeps the drive/controller path in suspicion.' `
+                    -Risk @('reversible')),
+                (New-PlaybookStep `
+                    -Do 'Run a full SMART read and chkdsk from an elevated shell.' `
+                    -Proves 'SMART errors or file-system repairs confirm the storage path; clean reads mean keep looking at controller/driver/cabling before replacing hardware.' `
+                    -Risk @('needs-admin')),
+                (New-PlaybookStep `
+                    -Do 'Update the storage controller or NVMe firmware and driver.' `
+                    -Proves 'Crashes gone after a controller/firmware update point at the storage stack; no change points back to hardware/cabling or another cause.' `
+                    -Risk @('changes-a-variable')),
+                (New-PlaybookStep `
+                    -Do 'Replace the drive or cable only on confirming evidence.' `
+                    -Proves 'Replacement is justified when SMART/chkdsk/cable evidence confirms it; without confirmation, do not buy storage hardware on a guess.' `
+                    -Risk @('costs-money'))
+            )
+        }
+        'driver-recent' {
+            return @(
+                (New-PlaybookStep `
+                    -Do 'Recall what changed most recently - driver, Windows update, or new app - and roll it back.' `
+                    -Proves 'Crashes gone after rollback = that change was the cause; crashes continuing means the recent change was not enough to explain it.' `
+                    -Risk @('reversible', 'changes-a-variable')),
+                (New-PlaybookStep `
+                    -Do 'Update or clean-reinstall the suspect driver.' `
+                    -Proves 'Crashes gone on a known-good driver path = the driver was the cause; no change means this needs deeper evidence.' `
+                    -Risk @('changes-a-variable')),
+                (New-PlaybookStep `
+                    -Do 'If the same stop code continues on a rolled-back or known-good driver, capture the next crash dump so deep mode can name the module.' `
+                    -Proves 'A dump that names a third-party module focuses the driver lead; a dump that does not name one keeps this as a pattern, not proof.' `
+                    -Risk @('reversible'))
+            )
+        }
+        'power' {
+            return @(
+                (New-PlaybookStep `
+                    -Do 'Turn on crash capture: small memory dump and UNCHECK auto-restart, so the next event is recorded.' `
+                    -Proves 'A recorded stop code moves this from a symptom checklist to a specific lead; no dump after another hard reset points harder at power loss or a hard hang.' `
+                    -Risk @('reversible')),
+                (New-PlaybookStep `
+                    -Do 'Check the physical power chain: PSU cables snug, wall outlet, and surge strip.' `
+                    -Proves 'Restarts stopping after a power-chain fix points at connection/input power; no change keeps PSU/thermal/overclock in the checklist.' `
+                    -Risk @('reversible')),
+                (New-PlaybookStep `
+                    -Do 'Check temperatures and dust under load.' `
+                    -Proves 'Restarts stopping after cleaning/cooling points at thermal shutdown; no change points past simple cooling.' `
+                    -Risk @('reversible')),
+                (New-PlaybookStep `
+                    -Do 'Drop any overclock or XMP/DOCP/EXPO profile to stock and re-test.' `
+                    -Proves 'Restarts gone at stock = the profile was unstable; restarts continuing at stock keep power/thermal/hardware in suspicion.' `
+                    -Risk @('reversible', 'needs-reboot', 'changes-a-variable')),
+                (New-PlaybookStep `
+                    -Do 'Swap-test the PSU if a spare exists - do not buy a PSU on this checklist alone.' `
+                    -Proves 'A known-good PSU changing the symptom points at power delivery; no change means do not blame the PSU from this checklist alone.' `
+                    -Risk @('changes-a-variable'))
+            )
+        }
+        'disk-space' {
+            return @(
+                (New-PlaybookStep `
+                    -Do 'Free space now: Storage Sense, temp files, Downloads, and Recycle Bin - aim for more than 10 percent free.' `
+                    -Proves 'Instability or update failures improving after free space returns points at disk pressure; no change means low space was not the main crash cause.' `
+                    -Risk @('reversible')),
+                (New-PlaybookStep `
+                    -Do 'If space is still low, uninstall unused apps or move large files/games to another drive.' `
+                    -Proves 'Free space staying above 10 percent removes disk pressure from this lead; continuing failures with enough space point elsewhere.' `
+                    -Risk @('reversible'))
+            )
+        }
+        'device' {
+            return @(
+                (New-PlaybookStep `
+                    -Do 'Update or reinstall the flagged device driver.' `
+                    -Proves 'The warning disappearing after driver work points at software/driver; the same code persisting points past the driver.' `
+                    -Risk @('changes-a-variable')),
+                (New-PlaybookStep `
+                    -Do 'Power off and check the device is seated or its cable is connected.' `
+                    -Proves 'The warning disappearing after seating/cable work points at connection; no change keeps the device itself or its driver in suspicion.' `
+                    -Risk @('reversible')),
+                (New-PlaybookStep `
+                    -Do 'Only if the code persists after driver work and seating, suspect the device itself and plan replacement.' `
+                    -Proves 'Persistent code after driver plus seating checks justifies replacement suspicion; if either check clears it, do not replace the device.' `
+                    -Risk @('costs-money'))
+            )
+        }
+        'app' {
+            return @(
+                (New-PlaybookStep `
+                    -Do 'Update or reinstall the crashing app; if it is a game, verify its files through its launcher.' `
+                    -Proves 'App crashes stopping after repair/reinstall = the app install was the cause; app crashes continuing means check the app stack next.' `
+                    -Risk @('reversible')),
+                (New-PlaybookStep `
+                    -Do 'If the crashing app is graphics- or codec-heavy, update the GPU driver and disable capture/overlay software.' `
+                    -Proves 'Crashes stopping after driver/overlay changes points at that app stack; no change keeps this as an app-specific failure, not a PC-wide hardware verdict.' `
+                    -Risk @('changes-a-variable')),
+                (New-PlaybookStep `
+                    -Do 'If it still crashes after both, treat it as a bug in that app and report it to the vendor - not a PC hardware fault.' `
+                    -Proves 'Only this app still failing points at an app/vendor bug; wider system crashes would be a separate signal outside this app node.' `
+                    -Risk @())
+            )
+        }
+        'handoff' {
+            return @(
+                (New-PlaybookStep `
+                    -Do 'BIOS Load Optimized Defaults to drop any DOCP/XMP or CPU overclock.' `
+                    -Proves 'Restarts stopping at defaults points at unstable settings; no change keeps hardware/power checks on the table.' `
+                    -Risk @('reversible', 'needs-reboot', 'changes-a-variable')),
+                (New-PlaybookStep `
+                    -Do 'Swap-test the GPU - do NOT buy or RMA on a guess.' `
+                    -Proves 'A swap that changes the symptom isolates the graphics card path; no change points back to PSU, motherboard, RAM, or software.' `
+                    -Risk @('changes-a-variable')),
+                (New-PlaybookStep `
+                    -Do 'Swap-test the PSU if a spare exists.' `
+                    -Proves 'A known-good PSU changing the symptom points at power delivery; no change means keep looking instead of buying a PSU on suspicion.' `
+                    -Risk @('changes-a-variable')),
+                (New-PlaybookStep `
+                    -Do 'If it ever fails to POST: read the motherboard debug LEDs, reseat RAM and GPU, and clear CMOS.' `
+                    -Proves 'A debug LED or reseat result narrows the failing part; a clean POST after CMOS/reseat points at settings or seating, not proof of a dead part.' `
+                    -Risk @('boot-risk', 'changes-a-variable')),
+                (New-PlaybookStep `
+                    -Do 'Watch temperatures in HWiNFO under load.' `
+                    -Proves 'Temperatures spiking with the symptom points at cooling or power limits; normal temperatures during the symptom point elsewhere.' `
+                    -Risk @('reversible'))
+            )
+        }
+        'capture' {
+            return @(
+                (New-PlaybookStep `
+                    -Do 'Win+R -> "SystemPropertiesAdvanced" -> Startup and Recovery Settings -> "Small memory dump (256 KB)" and UNCHECK "Automatically restart".' `
+                    -Proves 'If the next failure records a dump or stop code, the investigation gets specific; if it still records nothing, that itself points at power loss or a hard hang.' `
+                    -Risk @('reversible')),
+                (New-PlaybookStep `
+                    -Do 'Reproduce the crash, then re-run this tool - the next dump carries the stop code.' `
+                    -Proves 'A new dump/stop code gives the scorer and deep mode evidence; another dump-less restart keeps capture/power/thermal as the honest next question.' `
+                    -Risk @('reversible'))
             )
         }
     }
@@ -1890,7 +2058,8 @@ function New-Diagnosis($data) {
         $culprits += New-Culprit -Title 'Hardware fault (CPU / RAM / motherboard / power)' -TierClass 'cpu' -Tier 1 -Confidence 'High' `
             -For $for -Against @() `
             -ConfirmBy 'Remove any CPU/RAM overclock or XMP/EXPO profile and re-test. Verify temperatures and that the PSU is adequate. WHEA errors are never fixed in software.' `
-            -Search 'Windows 11 WHEA_UNCORRECTABLE_ERROR 0x124 troubleshooting'
+            -Search 'Windows 11 WHEA_UNCORRECTABLE_ERROR 0x124 troubleshooting' `
+            -Playbook (Get-CulpritPlaybook 'cpu')
     }
 
     # C. GPU display driver / GPU.
@@ -2026,7 +2195,8 @@ function New-Diagnosis($data) {
         $culprits += New-Culprit -Title 'Storage subsystem (drive / cable / controller)' -TierClass 'storage' -Tier $tier -Confidence $conf `
             -For $for -Against @() `
             -ConfirmBy 'Check the drive and its SATA/NVMe cabling, run chkdsk and a SMART check, and update the storage-controller driver.' `
-            -Search 'Windows 11 disk error event 153 KERNEL_DATA_INPAGE_ERROR drive failing'
+            -Search 'Windows 11 disk error event 153 KERNEL_DATA_INPAGE_ERROR drive failing' `
+            -Playbook (Get-CulpritPlaybook 'storage-subsystem')
     }
 
     # F. Consistent single-driver/software lean (only when codes are consistent and not hardware-classed).
@@ -2043,7 +2213,8 @@ function New-Diagnosis($data) {
                 -For @("All $crashCount crashes share the stop code $code - a consistent pattern points at one driver or software component.", $hint) `
                 -Against @('The exact module is not named here without a minidump analysis (that is the optional deep mode).') `
                 -ConfirmBy 'Recall what changed recently (a driver or Windows update, or a new app) and roll it back. Update or reinstall the most recently changed driver.' `
-                -Search "Windows 11 $nm $code fix"
+                -Search "Windows 11 $nm $code fix" `
+                -Playbook (Get-CulpritPlaybook 'driver-recent')
         }
     }
 
@@ -2060,8 +2231,9 @@ function New-Diagnosis($data) {
         if ($data.XmpActive -and $unexplainedCount -ge 6) { $cfor += 'RAM is running above standard JEDEC speed (an XMP/DOCP/EXPO overclock is active) - test with it disabled; an unstable memory overclock is a common cause of no-dump restarts.' }
         $culprits += New-Culprit -Title $headline -TierClass 'power' -Tier 'checklist' -Confidence 'Insufficient' -Prominence $unexplainedCount `
             -For $cfor -Against @() `
-            -ConfirmBy 'This is a symptom, not a diagnosis. Check in order: power (PSU, cables, wall outlet / surge protector), overheating (clean dust, verify temps), any overclock or XMP/DOCP profile, then enable full crash dumps (and disable auto-restart) so the next event is captured.' `
-            -Search 'Windows 11 Kernel-Power 41 random restart no BSOD PSU thermal'
+            -ConfirmBy 'This is a symptom, not a diagnosis. Check in order: turn on crash capture (small memory dump and auto-restart off), then power chain (PSU, cables, wall outlet / surge protector), overheating (clean dust, verify temps), any overclock or XMP/DOCP profile, and only then swap-test a spare PSU if one exists.' `
+            -Search 'Windows 11 Kernel-Power 41 random restart no BSOD PSU thermal' `
+            -Playbook (Get-CulpritPlaybook 'power')
     }
 
     # H. Low disk space. A full SYSTEM drive genuinely causes slowdowns / failed updates / instability
@@ -2075,7 +2247,8 @@ function New-Diagnosis($data) {
             $culprits += New-Culprit -Title "Low disk space on $($lv.Drive)" -TierClass 'storage' -Tier 2 -Confidence 'High' `
                 -For @("$($lv.Drive) has $($lv.FreeGB) GB free of $($lv.SizeGB) GB ($($lv.FreePct)%). Low free space causes slowdowns, failed updates, and instability.") -Against @() `
                 -ConfirmBy 'Free up space (Storage Sense, clear temp and Downloads, uninstall unused apps). Aim for more than 10% free.' `
-                -Search 'Windows 11 free up disk space slow performance'
+                -Search 'Windows 11 free up disk space slow performance' `
+                -Playbook (Get-CulpritPlaybook 'disk-space')
         } else {
             $culprits += New-Culprit -Title "Low disk space on $($lv.Drive)" -TierClass 'storage' -Tier 2 -Confidence 'Low' `
                 -For @("$($lv.Drive) has $($lv.FreeGB) GB free of $($lv.SizeGB) GB ($($lv.FreePct)%). $($lv.Drive) is a non-system drive - low space here can block saves, downloads, and installs on that drive, but does not by itself cause system crashes or freezes.") -Against @() `
@@ -2099,7 +2272,8 @@ function New-Diagnosis($data) {
         $culprits += New-Culprit -Title "Problem device$titleCls" -TierClass 'driver' -Tier 2 -Confidence 'Medium' `
             -For @("$clsLabel device flagged in Device Manager: $($pd.ProblemText).") -Against @() `
             -ConfirmBy 'Update or reinstall this device''s driver and check it is seated/connected. Code 43/10 usually means a driver or the device itself.' `
-            -Search "Windows 11 device $($pd.ProblemText) fix"
+            -Search "Windows 11 device $($pd.ProblemText) fix" `
+            -Playbook (Get-CulpritPlaybook 'device')
     }
 
     # App-crash names captured for SHARE-SAFE redaction: a faulting app / module filename is a user-renamable
@@ -2134,7 +2308,8 @@ function New-Diagnosis($data) {
             -For @("$($topApp.Name) logged $($topApp.Count) crash event(s)$modText.") `
             -Against $appAgainst `
             -ConfirmBy "Update or reinstall $($topApp.Name). If it is graphics- or codec-heavy, update those drivers too." `
-            -Search "$($topApp.Name) keeps crashing Windows 11 fix"
+            -Search "$($topApp.Name) keeps crashing Windows 11 fix" `
+            -Playbook (Get-CulpritPlaybook 'app')
     }
 
     # K. Tool-ceiling handoff: when restarts pile up with no dumps, a read-only scan has hit its
@@ -2143,7 +2318,8 @@ function New-Diagnosis($data) {
         $culprits += New-Culprit -Title 'This pattern may need hands-on hardware testing' -TierClass 'handoff' -Tier 'checklist' -Confidence 'Insufficient' `
             -For @('Most of these restarts left no crash dump, so a read-only software scan has reached its limit. The remaining suspects - PSU health, GPU hardware, a no-POST - can only be confirmed physically, not from logs.') -Against @() `
             -ConfirmBy 'Cheap reversible checks, in order: (1) BIOS Load Optimized Defaults to drop any DOCP/XMP or CPU overclock; (2) swap-test the GPU (known-good card in, or this card in another PC) - a swap that fixes it is proof; do NOT buy or RMA on a guess; (3) swap-test the PSU if a spare exists; (4) if it ever fails to POST, read the motherboard CPU/DRAM/VGA/BOOT debug LEDs, reseat RAM and GPU, and clear CMOS; (5) watch temps in HWiNFO under load.' `
-            -Search 'Windows 11 random restart no BSOD no dump PSU GPU swap test'
+            -Search 'Windows 11 random restart no BSOD no dump PSU GPU swap test' `
+            -Playbook (Get-CulpritPlaybook 'handoff')
     }
 
     # L. Capture this next: when restarts are going unrecorded (dump-less KP41, or dump-writes failing)
@@ -2165,7 +2341,8 @@ function New-Diagnosis($data) {
             $culprits += New-Culprit -Title 'Capture the next crash (dumps are not being saved)' -TierClass 'capture' -Tier 'checklist' -Confidence 'Insufficient' `
                 -For $cfor -Against @() `
                 -ConfirmBy 'Turn on crash capture so the next failure is recorded: press Win+R, run "SystemPropertiesAdvanced", then Startup and Recovery > Settings. Set "Write debugging information" to "Small memory dump (256 KB)" and UNCHECK "Automatically restart". Reproduce the crash, then re-run this tool - the next dump will carry the stop code.' `
-                -Search 'Windows 11 enable minidump disable automatic restart startup and recovery'
+                -Search 'Windows 11 enable minidump disable automatic restart startup and recovery' `
+                -Playbook (Get-CulpritPlaybook 'capture')
         }
     }
 
@@ -3022,6 +3199,12 @@ function Build-HelperSummary($sys, $diag, $stamp) {
                 [void]$sb.AppendLine('   - Against: no counter-signal captured.')
             }
             [void]$sb.AppendLine("   - Confirm next: $(ConvertTo-PacketSummaryText $c.ConfirmBy)")
+            if (@(Get-PlaybookSteps $c.Playbook).Count -gt 0) {
+                [void]$sb.AppendLine('   - Playbook:')
+                foreach ($line in (Get-PlaybookPlainLines $c.Playbook '     ' -Protect)) {
+                    [void]$sb.AppendLine($line)
+                }
+            }
             [void]$sb.AppendLine("   - $(ConvertTo-PacketSummaryText (Get-PacketDoNotDoYet $c))")
             $rank++
         }

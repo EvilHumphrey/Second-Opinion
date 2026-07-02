@@ -1,5 +1,8 @@
 counts crashes=0 distinct=0 unexplained=0 appcrash=10
 culprit | Application keeps crashing: python.exe | app | 2 | Low
+playbook | app | 1 | do=Update or reinstall the crashing app; if it is a game, verify its files through its launcher. | proves=App crashes stopping after repair/reinstall = the app install was the cause; app crashes continuing means check the app stack next. | risk=reversible
+playbook | app | 2 | do=If the crashing app is graphics- or codec-heavy, update the GPU driver and disable capture/overlay software. | proves=Crashes stopping after driver/overlay changes points at that app stack; no change keeps this as an app-specific failure, not a PC-wide hardware verdict. | risk=changes-a-variable
+playbook | app | 3 | do=If it still crashes after both, treat it as a bug in that app and report it to the vendor - not a PC hardware fault. | proves=Only this app still failing points at an app/vendor bug; wider system crashes would be a separate signal outside this app node. | risk=
 ruled | Drive health - all drives report SMART status Healthy.
 ruled | Disk space - no volume is critically low.
 ruled | Windows Update - no recent update failures.

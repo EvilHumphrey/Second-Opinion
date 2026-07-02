@@ -1,5 +1,8 @@
 counts crashes=0 distinct=0 unexplained=0 appcrash=0
 culprit | Problem device (Bluetooth) | driver | 2 | Medium
+playbook | driver | 1 | do=Update or reinstall the flagged device driver. | proves=The warning disappearing after driver work points at software/driver; the same code persisting points past the driver. | risk=changes-a-variable
+playbook | driver | 2 | do=Power off and check the device is seated or its cable is connected. | proves=The warning disappearing after seating/cable work points at connection; no change keeps the device itself or its driver in suspicion. | risk=reversible
+playbook | driver | 3 | do=Only if the code persists after driver work and seating, suspect the device itself and plan replacement. | proves=Persistent code after driver plus seating checks justifies replacement suspicion; if either check clears it, do not replace the device. | risk=costs-money
 ruled | Drive health - all drives report SMART status Healthy.
 ruled | Disk space - no volume is critically low.
 ruled | Windows Update - no recent update failures.

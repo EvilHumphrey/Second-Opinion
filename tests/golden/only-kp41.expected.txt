@@ -1,6 +1,16 @@
 counts crashes=0 distinct=0 unexplained=37 appcrash=0
 culprit | 37 unexpected restarts with no recorded cause - a frequent hard-reset pattern, the dominant symptom on this PC | power | checklist | Insufficient prom=37
+playbook | power | 1 | do=Turn on crash capture: small memory dump and UNCHECK auto-restart, so the next event is recorded. | proves=A recorded stop code moves this from a symptom checklist to a specific lead; no dump after another hard reset points harder at power loss or a hard hang. | risk=reversible
+playbook | power | 2 | do=Check the physical power chain: PSU cables snug, wall outlet, and surge strip. | proves=Restarts stopping after a power-chain fix points at connection/input power; no change keeps PSU/thermal/overclock in the checklist. | risk=reversible
+playbook | power | 3 | do=Check temperatures and dust under load. | proves=Restarts stopping after cleaning/cooling points at thermal shutdown; no change points past simple cooling. | risk=reversible
+playbook | power | 4 | do=Drop any overclock or XMP/DOCP/EXPO profile to stock and re-test. | proves=Restarts gone at stock = the profile was unstable; restarts continuing at stock keep power/thermal/hardware in suspicion. | risk=reversible,needs-reboot,changes-a-variable
+playbook | power | 5 | do=Swap-test the PSU if a spare exists - do not buy a PSU on this checklist alone. | proves=A known-good PSU changing the symptom points at power delivery; no change means do not blame the PSU from this checklist alone. | risk=changes-a-variable
 culprit | This pattern may need hands-on hardware testing | handoff | checklist | Insufficient
+playbook | handoff | 1 | do=BIOS Load Optimized Defaults to drop any DOCP/XMP or CPU overclock. | proves=Restarts stopping at defaults points at unstable settings; no change keeps hardware/power checks on the table. | risk=reversible,needs-reboot,changes-a-variable
+playbook | handoff | 2 | do=Swap-test the GPU - do NOT buy or RMA on a guess. | proves=A swap that changes the symptom isolates the graphics card path; no change points back to PSU, motherboard, RAM, or software. | risk=changes-a-variable
+playbook | handoff | 3 | do=Swap-test the PSU if a spare exists. | proves=A known-good PSU changing the symptom points at power delivery; no change means keep looking instead of buying a PSU on suspicion. | risk=changes-a-variable
+playbook | handoff | 4 | do=If it ever fails to POST: read the motherboard debug LEDs, reseat RAM and GPU, and clear CMOS. | proves=A debug LED or reseat result narrows the failing part; a clean POST after CMOS/reseat points at settings or seating, not proof of a dead part. | risk=boot-risk,changes-a-variable
+playbook | handoff | 5 | do=Watch temperatures in HWiNFO under load. | proves=Temperatures spiking with the symptom points at cooling or power limits; normal temperatures during the symptom point elsewhere. | risk=reversible
 ruled | Windows Update - no recent update failures.
 ruled | Devices - no problem devices in Device Manager.
 ruled | Hardware-error log (WHEA) - clean.

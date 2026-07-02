@@ -210,11 +210,18 @@ foreach ($gc in $gpuhwGlobalChecks) {
     else { Write-Host "VIOLATED  $($gc.N)" -ForegroundColor Red; $afail++ }
 }
 
-# ---- Playbook static-data guardrails: Slice 1 playbooks must keep cheap/reversible work before
+# ---- Playbook static-data guardrails: all playbooks must keep cheap/reversible work before
 #      money steps, keep backup first for failing drives, and use only the documented risk vocabulary.
-$playbookClasses = @('gpu', 'gpuhw', 'drive', 'memory')
+$playbookClasses = Get-CulpritPlaybookKeys
 $allowedPlaybookRisks = @('reversible', 'needs-admin', 'needs-reboot', 'boot-risk', 'costs-money', 'changes-a-variable')
 $playbookGlobalChecks = @(
+    @{ N = 'playbook global: every table key resolves to at least one static step'; C = {
+            $bad = $false
+            foreach ($tc in $playbookClasses) {
+                if (@(Get-CulpritPlaybook $tc).Count -lt 1) { $bad = $true }
+            }
+            -not $bad
+        } }
     @{ N = 'playbook global: every costs-money step comes after at least one non-costs-money step'; C = {
             $bad = $false
             foreach ($tc in $playbookClasses) {
@@ -228,6 +235,17 @@ $playbookGlobalChecks = @(
             -not $bad
         } }
     @{ N = 'playbook global: drive playbook starts with the backup step'; C = { $first = @(Get-CulpritPlaybook 'drive') | Select-Object -First 1; [bool]$first -and ([string](Get-PlaybookStepValue $first 'Do')) -match '^Back up important data now' } }
+    @{ N = 'playbook global: power playbook starts with crash capture'; C = { $first = @(Get-CulpritPlaybook 'power') | Select-Object -First 1; [bool]$first -and ([string](Get-PlaybookStepValue $first 'Do')) -match '^Turn on crash capture' } }
+    @{ N = 'playbook global: handoff CMOS step carries boot-risk and no costs-money step'; C = {
+            $hasBootRisk = $false
+            $hasMoney = $false
+            foreach ($step in @(Get-CulpritPlaybook 'handoff')) {
+                $risks = @((Get-PlaybookStepValue $step 'Risk') | ForEach-Object { [string]$_ })
+                if (([string](Get-PlaybookStepValue $step 'Do')) -match 'clear CMOS' -and $risks -contains 'boot-risk') { $hasBootRisk = $true }
+                if ($risks -contains 'costs-money') { $hasMoney = $true }
+            }
+            $hasBootRisk -and (-not $hasMoney)
+        } }
     @{ N = 'playbook global: all risk tags use the approved vocabulary'; C = {
             $bad = $false
             foreach ($tc in $playbookClasses) {
@@ -235,6 +253,16 @@ $playbookGlobalChecks = @(
                     foreach ($risk in @((Get-PlaybookStepValue $step 'Risk') | ForEach-Object { [string]$_ })) {
                         if ($allowedPlaybookRisks -notcontains $risk) { $bad = $true }
                     }
+                }
+            }
+            -not $bad
+        } }
+    @{ N = 'playbook global: only the existing DDU DoneWhen predicate is used'; C = {
+            $bad = $false
+            foreach ($tc in $playbookClasses) {
+                foreach ($step in @(Get-CulpritPlaybook $tc)) {
+                    $doneWhen = [string](Get-PlaybookStepValue $step 'DoneWhen')
+                    if ($doneWhen -and $doneWhen -ne 'ddu-or-clean-install-done') { $bad = $true }
                 }
             }
             -not $bad
@@ -521,8 +549,26 @@ $promptDrive   = Build-AiPrompt $probeSys $diags['multi-bad-drive'] (New-Redacti
 $htmlDrive     = Render-Html   $probeSys $diags['multi-bad-drive']
 $promptMemory  = Build-AiPrompt $probeSys $diags['memdiag-zero-crash'] (New-RedactionMap $probeSys) $true
 $htmlMemory    = Render-Html   $probeSys $diags['memdiag-zero-crash']
+$promptCpu     = Build-AiPrompt $probeSys $diags['whea-fatal'] (New-RedactionMap $probeSys) $true
+$htmlCpu       = Render-Html   $probeSys $diags['whea-fatal']
+$promptStorage = Build-AiPrompt $probeSys $diags['lone-storage'] (New-RedactionMap $probeSys) $true
+$htmlStorage   = Render-Html   $probeSys $diags['lone-storage']
+$promptDriver  = Build-AiPrompt $probeSys $diags['consistent-driver-crashes'] (New-RedactionMap $probeSys) $true
+$htmlDriver    = Render-Html   $probeSys $diags['consistent-driver-crashes']
 $promptKp41    = Build-AiPrompt $probeSys $diags['only-kp41'] (New-RedactionMap $probeSys) $true
 $htmlKp41      = Render-Html   $probeSys $diags['only-kp41']
+$lowSysDiag    = New-Diagnosis (_data @{ Volumes = @( (_vol 'C:' 4 465 $true) ) })
+$lowDataDiag   = New-Diagnosis (_data @{ Volumes = @( (_vol 'C:' 200 465 $false), (_vol 'D:' 5 1000 $true) ) })
+$promptLowSys  = Build-AiPrompt $probeSys $lowSysDiag (New-RedactionMap $probeSys) $true
+$htmlLowSys    = Render-Html   $probeSys $lowSysDiag
+$promptLowData = Build-AiPrompt $probeSys $lowDataDiag (New-RedactionMap $probeSys) $true
+$htmlLowData   = Render-Html   $probeSys $lowDataDiag
+$promptDevice  = Build-AiPrompt $probeSys $diags['degraded-device'] (New-RedactionMap $probeSys) $true
+$htmlDevice    = Render-Html   $probeSys $diags['degraded-device']
+$promptApp     = Build-AiPrompt $probeSys $diags['intake-appclose'] (New-RedactionMap $probeSys) $true
+$htmlApp       = Render-Html   $probeSys $diags['intake-appclose']
+$promptHandoff = Build-AiPrompt $probeSys $diags['gpu-failure-01'] (New-RedactionMap $probeSys) $true
+$htmlHandoff   = Render-Html   $probeSys $diags['gpu-failure-01']
 $promptXmp     = Build-AiPrompt $probeSys $diags['xmp-off'] (New-RedactionMap $probeSys) $true
 $promptSmart52 = Build-AiPrompt $probeSys $diags['smart52-alone'] (New-RedactionMap $probeSys) $true
 $htmlSmart52   = Render-Html   $probeSys $diags['smart52-alone']
@@ -545,8 +591,16 @@ $renderChecks = @(
     @{ N = 'render: GPU-hardware playbook reaches report.html and AI prompt, including RMA last'; C = { ($htmlGpuhw -match 'Only after swap-test evidence, RMA or replace') -and ($htmlGpuhw -match '\[costs money\]') -and ($promptGpuhw -match '(?m)^\s+3\. Only after swap-test evidence, RMA or replace') } }
     @{ N = 'render: drive playbook reaches report.html and AI prompt with backup first'; C = { ($htmlDrive -match '<li>Back up important data now') -and ($promptDrive -match '(?m)^\s+1\. Back up important data now') -and ($promptDrive -match '\[needs admin\]') } }
     @{ N = 'render: memory playbook reaches report.html and AI prompt with stock-speed retest first'; C = { ($htmlMemory -match '<li>If XMP/EXPO/DOCP is active') -and ($promptMemory -match '(?m)^\s+1\. If XMP/EXPO/DOCP is active') -and ($promptMemory -match '\[needs reboot\]') } }
-    @{ N = 'render: nodes without playbooks stay flat (no playbook block in only-kp41)'; C = { ($promptKp41 -notmatch 'playbook:') -and ($htmlKp41 -notmatch 'confirm playbook:') } }
-    @{ N = 'render: the capture-the-next-crash card reaches the AI prompt'; C = { $promptCapture -match 'Capture the next crash' } }
+    @{ N = 'render: CPU playbook reaches report.html and AI prompt'; C = { ($htmlCpu -match '<li>Remove any CPU/RAM overclock') -and ($promptCpu -match '(?m)^\s+1\. Remove any CPU/RAM overclock') -and ($promptCpu -match '\[needs reboot\]') } }
+    @{ N = 'render: storage-subsystem playbook reaches report.html and AI prompt'; C = { ($htmlStorage -match '<li>Reseat or replace the drive data') -and ($promptStorage -match '(?m)^\s+1\. Reseat or replace the drive data') -and ($promptStorage -match '\[needs admin\]') } }
+    @{ N = 'render: recent-driver playbook reaches report.html and AI prompt'; C = { ($htmlDriver -match '<li>Recall what changed most recently') -and ($promptDriver -match '(?m)^\s+1\. Recall what changed most recently') -and ($promptDriver -match 'capture the next crash dump') } }
+    @{ N = 'render: power playbook reaches report.html and AI prompt with capture first'; C = { ($htmlKp41 -match '<li>Turn on crash capture') -and ($promptKp41 -match '(?m)^\s+1\. Turn on crash capture') -and ($promptKp41 -match '\[reversible\]') } }
+    @{ N = 'render: system low-disk playbook reaches report.html and AI prompt'; C = { ($htmlLowSys -match '<li>Free space now') -and ($promptLowSys -match '(?m)^\s+1\. Free space now') -and ($promptLowSys -match 'more than 10 percent free') } }
+    @{ N = 'render: problem-device playbook reaches report.html and AI prompt'; C = { ($htmlDevice -match '<li>Update or reinstall the flagged device driver') -and ($promptDevice -match '(?m)^\s+1\. Update or reinstall the flagged device driver') -and ($promptDevice -match '\[costs money\]') } }
+    @{ N = 'render: app playbook reaches report.html and AI prompt'; C = { ($htmlApp -match '<li>Update or reinstall the crashing app') -and ($promptApp -match '(?m)^\s+1\. Update or reinstall the crashing app') -and ($promptApp -match 'capture/overlay software') } }
+    @{ N = 'render: handoff playbook reaches report.html and AI prompt with boot-risk tag'; C = { ($htmlHandoff -match '<li>BIOS Load Optimized Defaults') -and ($promptHandoff -match '(?m)^\s+4\. If it ever fails to POST') -and ($promptHandoff -match '\[boot risk\]') } }
+    @{ N = 'render: capture playbook reaches report.html and AI prompt'; C = { ($promptCapture -match 'Capture the next crash') -and ($promptCapture -match '(?m)^\s+1\. Win\+R -> "SystemPropertiesAdvanced"') -and ($promptCapture -match '\[reversible\]') } }
+    @{ N = 'render: non-system low-disk node stays flat (no playbook block)'; C = { ($promptLowData -notmatch 'playbook:') -and ($htmlLowData -notmatch 'confirm playbook:') } }
     @{ N = 'render: the XMP-off performance tip reaches the AI prompt'; C = { $promptXmp -match 'Performance tip' } }
     @{ N = 'render: the report carries a "What was checked this run" readability matrix'; C = { $htmlIntake -match 'What was checked this run' } }
     @{ N = 'render: a blind-run prompt lists SIGNALS NOT READ THIS PASS'; C = { (Build-AiPrompt $probeSys $diags['blind-run'] (New-RedactionMap $probeSys) $true) -match 'SIGNALS NOT READ THIS PASS' } }
@@ -709,10 +763,20 @@ $packetGpuFailure01 = New-HelperPacketArtifacts $redSys $diags['gpu-failure-01']
 $packetGpuhw = New-HelperPacketArtifacts $redSys $diags['gpuhw-tdr-vendor'] $redMap $packetStamp
 $packetDrive = New-HelperPacketArtifacts $redSys $diags['multi-bad-drive'] $redMap $packetStamp
 $packetMemory = New-HelperPacketArtifacts $redSys $diags['memdiag-zero-crash'] $redMap $packetStamp
+$packetCpu = New-HelperPacketArtifacts $redSys $diags['whea-fatal'] $redMap $packetStamp
+$packetStorage = New-HelperPacketArtifacts $redSys $diags['lone-storage'] $redMap $packetStamp
+$packetDriver = New-HelperPacketArtifacts $redSys $diags['consistent-driver-crashes'] $redMap $packetStamp
+$packetPower = New-HelperPacketArtifacts $redSys $diags['only-kp41'] $redMap $packetStamp
+$packetDisk = New-HelperPacketArtifacts $redSys $lowSysDiag $redMap $packetStamp
+$packetDevice = New-HelperPacketArtifacts $redSys $diags['degraded-device'] $redMap $packetStamp
+$packetApp = New-HelperPacketArtifacts $redSys $diags['intake-appclose'] $redMap $packetStamp
+$packetHandoff = New-HelperPacketArtifacts $redSys $diags['gpu-failure-01'] $redMap $packetStamp
+$packetCapture = New-HelperPacketArtifacts $redSys $diags['capture-dumps'] $redMap $packetStamp
 $packetAllText = (@($packetSentinel.Values) -join "`n")
 $packetEvidenceObj = $packetSentinel['redacted-evidence.json'] | ConvertFrom-Json
 $packetGpuFailure01EvidenceObj = $packetGpuFailure01['redacted-evidence.json'] | ConvertFrom-Json
 $packetPlaybookText = (@($packetGpuFailure01.Values) + @($packetGpuhw.Values) + @($packetDrive.Values) + @($packetMemory.Values)) -join "`n"
+$packetSlice2PlaybookText = (@($packetCpu.Values) + @($packetStorage.Values) + @($packetDriver.Values) + @($packetPower.Values) + @($packetDisk.Values) + @($packetDevice.Values) + @($packetApp.Values) + @($packetHandoff.Values) + @($packetCapture.Values)) -join "`n"
 $hostilePlaybookMarker = 'PLAYBOOK-HOSTILE-MARKER'
 $hostilePlaybookDiag = New-Diagnosis (_data @{
     Crashes = @( (_crash 0 'BugCheck 1001' '0x116'), (_crash -200 'BugCheck 1001' '0x116') )
@@ -736,6 +800,8 @@ $packetChecks = @(
     @{ N = 'helper-packet: redacted-evidence.json carries SchemaVersion and version stamp'; C = { ($packetEvidenceObj.SchemaVersion -eq '1.1') -and ($packetEvidenceObj.VersionStamp.ToolVersion -eq $ScriptVersion) -and ($packetEvidenceObj.VersionStamp.KbHash -eq 'TEST-KB-HASH') -and ($packetEvidenceObj.VersionStamp.GitSha -eq 'abc1234') } }
     @{ N = 'helper-packet: redacted-evidence.json carries structured playbook steps'; C = { $g = @($packetGpuFailure01EvidenceObj.Culprits | Where-Object { $_.TierClass -eq 'gpu' }) | Select-Object -First 1; [bool]$g -and (@($g.Playbook).Count -ge 2) -and (@($g.Playbook[0].Risk) -contains 'reversible') -and ($g.Playbook[0].Do -match 'Clean-reinstall') } }
     @{ N = 'helper-packet: packet artifacts carry all four Slice 1 playbooks'; C = { ($packetPlaybookText -match 'Clean-reinstall the GPU driver') -and ($packetPlaybookText -match 'Only after swap-test evidence, RMA or replace') -and ($packetPlaybookText -match 'Back up important data now') -and ($packetPlaybookText -match 'If XMP/EXPO/DOCP is active') } }
+    @{ N = 'helper-packet: packet artifacts carry all Slice 2 playbooks'; C = { ($packetSlice2PlaybookText -match 'Remove any CPU/RAM overclock') -and ($packetSlice2PlaybookText -match 'Reseat or replace the drive data') -and ($packetSlice2PlaybookText -match 'Recall what changed most recently') -and ($packetSlice2PlaybookText -match 'Turn on crash capture') -and ($packetSlice2PlaybookText -match 'Free space now') -and ($packetSlice2PlaybookText -match 'Update or reinstall the flagged device driver') -and ($packetSlice2PlaybookText -match 'Update or reinstall the crashing app') -and ($packetSlice2PlaybookText -match 'BIOS Load Optimized Defaults') -and ($packetSlice2PlaybookText -match 'Win\+R -> "SystemPropertiesAdvanced"') } }
+    @{ N = 'helper-packet: helper-summary keeps compact Confirm next and adds numbered risk-tagged playbook steps'; C = { ($packetPower['helper-summary.md'] -match 'Confirm next:') -and ($packetPower['helper-summary.md'] -match '(?m)^\s+1\. Turn on crash capture.*\[reversible\]') -and ($packetPower['helper-summary.md'] -match '(?m)^\s+2\. Check the physical power chain') } }
     @{ N = 'helper-packet: hostile dynamic marker does not enter playbook blocks in share-safe sinks'; C = { ($hostilePromptPlaybookBlock.Length -gt 0) -and ($hostileReportPlaybookBlock.Length -gt 0) -and ($hostileEvidencePlaybookText.Length -gt 0) -and ($hostilePromptPlaybookBlock -notmatch $hostilePlaybookMarker) -and ($hostileReportPlaybookBlock -notmatch $hostilePlaybookMarker) -and ($hostileEvidencePlaybookText -notmatch $hostilePlaybookMarker) } }
     @{ N = 'helper-packet: unreadable-signals lists unreadable rows on partial-readable'; C = { ($packetPartial['unreadable-signals.txt'] -match 'Drive health') -and ($packetPartial['unreadable-signals.txt'] -match 'Hardware-error log') -and ($packetPartial['unreadable-signals.txt'] -match 'Treat each one as unknown') } }
     @{ N = 'helper-packet: redaction audit lists counts without masked values'; C = { ($packetSentinel['redaction-audit.txt'] -notmatch 'DESKTOP-RED01|redacted_user|SN-REDACT-77') -and ($packetSentinel['redaction-audit.txt'] -match 'Hostnames masked: [1-9]') -and ($packetSentinel['redaction-audit.txt'] -match 'Usernames masked: [1-9]') -and ($packetSentinel['redaction-audit.txt'] -match 'Serials masked: [1-9]') -and ($packetSentinel['redaction-audit.txt'] -match 'MAC addresses masked: [1-9]') -and ($packetSentinel['redaction-audit.txt'] -match 'IPv4 addresses masked: [1-9]') -and ($packetSentinel['redaction-audit.txt'] -match 'IPv6 addresses masked: [1-9]') } }
@@ -968,6 +1034,7 @@ $lowDiskChecks = @(
     @{ N = 'low-disk: a full SYSTEM drive (C:) is a tier-2/High instability culprit'; C = { $s = @($lowSysDiag.Culprits | Where-Object { $_.TierClass -eq 'storage' }) | Select-Object -First 1; [bool]$s -and ($s.Tier -eq 2) -and ($s.Confidence -eq 'High') -and [bool](@($s.For) | Where-Object { $_ -match 'instability' }) } }
     @{ N = 'low-disk: a full NON-system drive (D:) is advisory Low, not High'; C = { $s = @($lowDataDiag.Culprits | Where-Object { $_.TierClass -eq 'storage' -and $_.Title -match 'D:' }) | Select-Object -First 1; [bool]$s -and ($s.Confidence -eq 'Low') -and ($s.Tier -eq 2) } }
     @{ N = 'low-disk: a full NON-system drive does NOT claim it causes Windows instability'; C = { $s = @($lowDataDiag.Culprits | Where-Object { $_.TierClass -eq 'storage' -and $_.Title -match 'D:' }) | Select-Object -First 1; [bool]$s -and (-not [bool](@($s.For) | Where-Object { $_ -match 'instability' })) } }
+    @{ N = 'low-disk: a full NON-system drive stays flat with no playbook'; C = { $s = @($lowDataDiag.Culprits | Where-Object { $_.TierClass -eq 'storage' -and $_.Title -match 'D:' }) | Select-Object -First 1; [bool]$s -and (@(Get-PlaybookSteps $s.Playbook).Count -eq 0) -and ($promptLowData -notmatch 'playbook:') -and ($htmlLowData -notmatch 'confirm playbook:') } }
 )
 foreach ($rc in $lowDiskChecks) {
     $ok = $false

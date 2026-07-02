@@ -1,5 +1,9 @@
 counts crashes=0 distinct=0 unexplained=0 appcrash=0
 culprit | Hardware fault (CPU / RAM / motherboard / power) | cpu | 1 | High
+playbook | cpu | 1 | do=Remove any CPU/RAM overclock - including XMP/DOCP/EXPO - and re-test at stock settings. | proves=Crashes gone at stock settings = the overclock/profile was unstable; WHEA errors still present at stock point toward hardware, cooling, or power. | risk=reversible,needs-reboot,changes-a-variable
+playbook | cpu | 2 | do=Verify cooling: watch temperatures under load, clean dust, and confirm fans spin normally. | proves=Errors gone after cooling is corrected = heat was a trigger; errors still present with good temperatures point past simple cooling. | risk=reversible
+playbook | cpu | 3 | do=Check PSU adequacy and CPU/GPU power cabling; swap-test the PSU if a spare exists. | proves=A symptom change with a known-good PSU/cabling points at power delivery; no change keeps CPU/RAM/motherboard in suspicion. | risk=changes-a-variable
+playbook | cpu | 4 | do=If WHEA errors persist at stock with good temperatures and power, plan replacement of the implicated component when the WHEA source line names one. | proves=Persistent WHEA at stock after cooling/power checks is confirming evidence; if WHEA stops, replacement is not justified from this run alone. | risk=costs-money
 note | Performance smoke test (opt-in): checked CPU firmware-throttling (Kernel-Processor-Power 37) and low-virtual-memory events (Resource-Exhaustion-Detector 2004) over this window. This is a read-only scan of existing event logs - it does NOT read temperatures (native temps are out of scope) and a clean scan is NOT a clean bill of health (it cannot rule out overheating or a marginal/failing PSU).
 ruled | Drive health - all drives report SMART status Healthy.
 ruled | Disk space - no volume is critically low.
